@@ -88,6 +88,46 @@ class TransactionTest < ActiveXATestCase
     assert_equal [1, 1], counts
   end
 
+  def test_early_return_commits_even_while_another_exception_is_being_handled
+    begin
+      raise "unrelated"
+    rescue RuntimeError
+      early_return_helper
+    end
+
+    assert_equal [1, 1], counts
+  end
+
+  def test_throw_commits_like_rails_does
+    catch(:done) do
+      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+        Order.create!(name: "order")
+        TrackerEvent.create!(name: "tracked")
+        throw :done
+      end
+    end
+
+    assert_equal [1, 1], counts
+  end
+
+  def test_killing_the_thread_rolls_back_like_rails_does
+    written = Queue.new
+    thread = Thread.new do
+      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+        Order.create!(name: "order")
+        TrackerEvent.create!(name: "tracked")
+        written << true
+        sleep
+      end
+    end
+    written.pop
+    thread.kill
+    thread.join
+
+    assert_equal [0, 0], counts
+    assert_empty prepared_xids(PrimaryRecord)
+  end
+
   def test_nested_requires_new_rollback_inside_xa
     ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "kept")

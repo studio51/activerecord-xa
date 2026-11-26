@@ -77,15 +77,19 @@ module ActiveXA
       end
 
       # Rails commits when a transaction block exits early via return, break
-      # or throw, so we do too. Exceptions skip finish! and roll back.
+      # or throw, and rolls back when the block raises or its thread is being
+      # killed. So do we.
       def run_block
-        completed = false
+        outcome = :left_early
         result = yield
-        completed = true
+        outcome = :finished
         finish!
         result
+      rescue Exception
+        outcome = :raised
+        raise
       ensure
-        finish! if !completed && $!.nil?
+        finish! if outcome == :left_early && Thread.current.status != "aborting"
       end
 
       def finish!
