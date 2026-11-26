@@ -2,14 +2,14 @@
 
 require_relative "test_helper"
 
-class RecoveryTest < ActiveXATestCase
+class RecoveryTest < XATestCase
   def test_commit_failure_leaves_branch_in_doubt_and_recovery_commits_it
     reported = nil
-    ActiveXA.config.on_incomplete_commit = ->(gtrid, failures) { reported = [ gtrid, failures.size ] }
+    ActiveRecord::XA.config.on_incomplete_commit = ->(gtrid, failures) { reported = [ gtrid, failures.size ] }
     FaultInjection.rules = { commit!: /tracker/ }
 
     # Not raised: the decision is logged, so the transaction is committed.
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "order")
       TrackerEvent.create!(name: "tracked")
     end
@@ -23,7 +23,7 @@ class RecoveryTest < ActiveXATestCase
 
     assert_equal 1, report.committed.size
     assert_equal [ 1, 1 ], counts
-    assert_empty ActiveXA.decision_log.entries
+    assert_empty ActiveRecord::XA.decision_log.entries
   end
 
   def test_crash_after_decision_is_committed_by_recovery
@@ -54,10 +54,10 @@ class RecoveryTest < ActiveXATestCase
   end
 
   def test_recovery_prunes_decisions_with_nothing_left_to_do
-    ActiveXA.decision_log.record_commit!(new_gtrid, [])
+    ActiveRecord::XA.decision_log.record_commit!(new_gtrid, [])
     report = recover(grace: 0)
     assert_equal 1, report.pruned.size
-    assert_empty ActiveXA.decision_log.entries
+    assert_empty ActiveRecord::XA.decision_log.entries
   end
 
   def test_recovery_resolves_branches_with_multibyte_qualifiers
@@ -74,19 +74,19 @@ class RecoveryTest < ActiveXATestCase
 
     report = recover(grace: 0, abort_retention: 3600)
     assert_equal 2, report.rolled_back.size
-    assert_equal :abort, ActiveXA.decision_log.outcome(gtrid)
+    assert_equal :abort, ActiveRecord::XA.decision_log.outcome(gtrid)
     assert_raises(ActiveRecord::RecordNotUnique, "a coordinator must not be able to log a commit now") do
-      ActiveXA.decision_log.record_commit!(gtrid, [])
+      ActiveRecord::XA.decision_log.record_commit!(gtrid, [])
     end
 
     report = recover(grace: 0, abort_retention: 0)
     assert_equal [ gtrid ], report.pruned
-    assert_empty ActiveXA.decision_log.entries
+    assert_empty ActiveRecord::XA.decision_log.entries
   end
 
   def test_every_branch_of_a_transaction_gets_the_same_outcome
     gtrid = simulate_crash(log_decision: false)
-    log = ActiveXA.decision_log
+    log = ActiveRecord::XA.decision_log
     late_commit = nil
     # The coordinator turns out to be alive: it tries to log its commit as
     # soon as recovery has dealt with the first branch.
@@ -103,7 +103,7 @@ class RecoveryTest < ActiveXATestCase
       end
     end)
 
-    report = ActiveXA::Recovery.new([ PrimaryRecord, TrackerRecord ], log:, grace: 0).run
+    report = ActiveRecord::XA::Recovery.new([ PrimaryRecord, TrackerRecord ], log:, grace: 0).run
 
     assert_equal :refused, late_commit
     assert_equal [ gtrid, gtrid ], report.rolled_back.map(&:gtrid)
@@ -111,11 +111,11 @@ class RecoveryTest < ActiveXATestCase
   end
 
   def test_a_commit_decision_is_pruned_by_its_own_age_not_the_transactions
-    gtrid = long_running_transaction { ActiveXA.decision_log.record_commit!(new_gtrid, []) }
+    gtrid = long_running_transaction { ActiveRecord::XA.decision_log.record_commit!(new_gtrid, []) }
 
     report = recover(grace: 3600)
     assert_empty report.pruned, "the decision was logged a moment ago, however long ago the transaction began"
-    assert_equal [ gtrid ], ActiveXA.decision_log.entries
+    assert_equal [ gtrid ], ActiveRecord::XA.decision_log.entries
   end
 
   def test_recovery_leaves_another_installations_branches_alone
@@ -126,7 +126,7 @@ class RecoveryTest < ActiveXATestCase
     report = recover(grace: 0)
 
     assert_empty report.rolled_back + report.committed + report.skipped
-    assert_empty ActiveXA.decision_log.entries
+    assert_empty ActiveRecord::XA.decision_log.entries
     assert_equal 2, prepared_xids(PrimaryRecord).size, "their branches are theirs to decide"
   end
 
@@ -139,9 +139,9 @@ class RecoveryTest < ActiveXATestCase
 
   def test_a_decision_is_only_pruned_by_a_run_that_covers_all_its_databases
     gtrid = new_gtrid
-    ActiveXA.decision_log.record_commit!(gtrid, %w[primary tracker])
+    ActiveRecord::XA.decision_log.record_commit!(gtrid, %w[primary tracker])
 
-    partial = ActiveXA::Recovery.new([ PrimaryRecord ], log: ActiveXA.decision_log, grace: 0).run
+    partial = ActiveRecord::XA::Recovery.new([ PrimaryRecord ], log: ActiveRecord::XA.decision_log, grace: 0).run
     assert_empty partial.pruned, "a branch may be waiting on the database this run was not given"
 
     assert_equal [ gtrid ], recover(grace: 0).pruned
@@ -150,14 +150,14 @@ class RecoveryTest < ActiveXATestCase
   def test_a_database_that_cannot_be_reached_does_not_hold_up_the_others
     gtrid = simulate_crash(log_decision: true)
 
-    report = ActiveXA::Recovery.new([ UnreachableRecord, PrimaryRecord, TrackerRecord ],
-                                    log: ActiveXA.decision_log, grace: 0).run
+    report = ActiveRecord::XA::Recovery.new([ UnreachableRecord, PrimaryRecord, TrackerRecord ],
+                                    log: ActiveRecord::XA.decision_log, grace: 0).run
 
     assert_equal [ gtrid, gtrid ], report.committed.map(&:gtrid)
     assert_equal [ 1, 1 ], counts
     assert_equal [ "unreachable" ], report.errors.map(&:first)
     assert_empty report.pruned, "the database that was not asked may hold a branch of any decision"
-    assert_equal [ gtrid ], ActiveXA.decision_log.entries
+    assert_equal [ gtrid ], ActiveRecord::XA.decision_log.entries
   end
 
   private
@@ -166,7 +166,7 @@ class RecoveryTest < ActiveXATestCase
     def simulate_crash(log_decision:, bqual_name: "crash", gtrid: new_gtrid)
       branches = [ [ PrimaryRecord, "orders" ], [ TrackerRecord, "tracker_events" ] ].map.with_index do |(klass, table), i|
         conn = klass.connection_pool.checkout
-        xid = ActiveXA::Xid.new(gtrid, ActiveXA::Xid.bqual(i, bqual_name))
+        xid = ActiveRecord::XA::Xid.new(gtrid, ActiveRecord::XA::Xid.bqual(i, bqual_name))
         conn.execute("XA START #{ xid.to_sql(conn) }")
         conn.execute("INSERT INTO #{ table } (name) VALUES ('crashed')")
         conn.execute("XA END #{ xid.to_sql(conn) }")
@@ -175,7 +175,7 @@ class RecoveryTest < ActiveXATestCase
       end
 
       if log_decision
-        ActiveXA.decision_log.record_commit!(gtrid, %w[primary tracker])
+        ActiveRecord::XA.decision_log.record_commit!(gtrid, %w[primary tracker])
       end
 
       branches.each do |klass, conn|

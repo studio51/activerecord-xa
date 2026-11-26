@@ -2,26 +2,26 @@
 
 require_relative "test_helper"
 
-class TransactionTest < ActiveXATestCase
+class TransactionTest < XATestCase
   def test_commits_on_both_databases
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       TrackerEvent.create!(name: "tracked")
       Order.create!(name: "order")
     end
 
     assert_equal [ 1, 1 ], counts
     assert_empty prepared_xids(PrimaryRecord)
-    assert_empty ActiveXA.decision_log.entries, "decision row should be cleared after a clean commit"
+    assert_empty ActiveRecord::XA.decision_log.entries, "decision row should be cleared after a clean commit"
   end
 
   def test_returns_block_value
-    assert_equal :done, ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; :done }
+    assert_equal :done, ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; :done }
   end
 
   def test_the_articles_failure_case_rolls_back_both
     # The article's scenario: tracker write fine, then the primary side fails.
     assert_raises(RuntimeError) do
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
         TrackerEvent.create!(name: "tracked")
         Order.create!(name: "order")
         raise "boom after both writes"
@@ -33,7 +33,7 @@ class TransactionTest < ActiveXATestCase
   end
 
   def test_active_record_rollback_rolls_back_every_database_quietly
-    result = ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    result = ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "order")
       TrackerEvent.create!(name: "tracked")
       raise ActiveRecord::Rollback
@@ -46,21 +46,21 @@ class TransactionTest < ActiveXATestCase
   end
 
   def test_active_record_rollback_when_only_the_outer_database_was_touched
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "order")
       raise ActiveRecord::Rollback
     end
 
     assert_equal [ 0, 0 ], counts
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "next"); TrackerEvent.create!(name: "next") }
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "next"); TrackerEvent.create!(name: "next") }
     assert_equal [ 1, 1 ], counts
   end
 
   def test_prepare_failure_rolls_back_the_database_that_already_prepared
     FaultInjection.rules = { end_and_prepare!: /tracker/ }
 
-    assert_raises(ActiveXA::PrepareFailed) do
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    assert_raises(ActiveRecord::XA::PrepareFailed) do
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
         Order.create!(name: "order")
         TrackerEvent.create!(name: "tracked")
       end
@@ -69,11 +69,11 @@ class TransactionTest < ActiveXATestCase
     assert_equal [ 0, 0 ], counts
     assert_empty prepared_xids(PrimaryRecord)
     assert_empty prepared_xids(TrackerRecord)
-    assert_empty ActiveXA.decision_log.entries
+    assert_empty ActiveRecord::XA.decision_log.entries
   end
 
   def test_after_commit_runs_only_once_every_database_has_committed
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       TrackerEvent.create!(name: "tracked", check_order_visible: true)
       Order.create!(name: "order")
     end
@@ -84,7 +84,7 @@ class TransactionTest < ActiveXATestCase
   end
 
   def test_before_commit_runs_once_and_before_prepare
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "order")
       TrackerEvent.create!(name: "tracked")
     end
@@ -93,17 +93,17 @@ class TransactionTest < ActiveXATestCase
   end
 
   def test_single_database_touched_uses_one_phase_commit_and_no_log
-    log = ActiveXA.decision_log
+    log = ActiveRecord::XA.decision_log
     def log.record_commit!(*) = raise("decision log should not be used")
-    ActiveXA.stub(:decision_log, log) do
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "solo") }
+    ActiveRecord::XA.stub(:decision_log, log) do
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "solo") }
     end
 
     assert_equal [ 1, 0 ], counts
   end
 
   def test_untouched_transaction_is_fine
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) { nil }
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { nil }
     assert_equal [ 0, 0 ], counts
   end
 
@@ -124,7 +124,7 @@ class TransactionTest < ActiveXATestCase
 
   def test_throw_commits_like_rails_does
     catch(:done) do
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
         Order.create!(name: "order")
         TrackerEvent.create!(name: "tracked")
         throw :done
@@ -137,7 +137,7 @@ class TransactionTest < ActiveXATestCase
   def test_killing_the_thread_rolls_back_like_rails_does
     written = Queue.new
     thread = Thread.new do
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
         Order.create!(name: "order")
         TrackerEvent.create!(name: "tracked")
         written << true
@@ -153,7 +153,7 @@ class TransactionTest < ActiveXATestCase
   end
 
   def test_nested_requires_new_rollback_inside_xa
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "kept")
       Order.transaction(requires_new: true) do
         Order.create!(name: "discarded")
@@ -169,7 +169,7 @@ class TransactionTest < ActiveXATestCase
   def test_nested_requires_new_rollback_before_the_first_write
     # Rails restarts the outer transaction instead of using a savepoint
     # here: XA ROLLBACK, then XA START again under the same XID.
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.transaction(requires_new: true) do
         Order.create!(name: "discarded")
         raise ActiveRecord::Rollback
@@ -183,7 +183,7 @@ class TransactionTest < ActiveXATestCase
   end
 
   def test_nested_non_joinable_transaction_uses_a_savepoint
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "outer")
       Order.transaction(joinable: false) { Order.create!(name: "inner") }
       TrackerEvent.create!(name: "tracked")
@@ -195,13 +195,13 @@ class TransactionTest < ActiveXATestCase
 
   def test_a_finished_branch_cannot_be_reopened
     branch = nil
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "order")
       TrackerEvent.create!(name: "tracked")
-      branch = PrimaryRecord.lease_connection.active_xa_branch
+      branch = PrimaryRecord.lease_connection.xa_branch
     end
 
-    error = assert_raises(ActiveXA::UnsupportedOperation) { branch.start! }
+    error = assert_raises(ActiveRecord::XA::UnsupportedOperation) { branch.start! }
     assert_match(/is committed and cannot be started again/, error.message)
   end
 
@@ -221,7 +221,7 @@ class TransactionTest < ActiveXATestCase
     end
 
     names = nil
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       names = Order.where(name: "existing").map(&:name)
       Order.create!(name: "after reconnect")
       TrackerEvent.create!(name: "tracked")
@@ -240,7 +240,7 @@ class TransactionTest < ActiveXATestCase
     ActiveRecord.default_transaction_isolation_level = :read_committed
     newly_visible = nil
 
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       TrackerEvent.create!(name: "tracked")
       before = Order.count
       commit_an_order_from_another_session
@@ -257,7 +257,7 @@ class TransactionTest < ActiveXATestCase
   def test_without_a_default_isolation_level_the_branches_keep_repeatable_read
     newly_visible = nil
 
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       before = Order.count
       commit_an_order_from_another_session
       newly_visible = Order.count - before
@@ -267,19 +267,19 @@ class TransactionTest < ActiveXATestCase
   end
 
   def test_refuses_to_join_an_already_open_transaction
-    assert_raises(ActiveXA::TransactionAlreadyOpen) do
+    assert_raises(ActiveRecord::XA::TransactionAlreadyOpen) do
       Order.transaction do
-        ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create! }
+        ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { Order.create! }
       end
     end
   end
 
   def test_needs_two_different_databases
-    assert_raises(ArgumentError) { ActiveXA.transaction(PrimaryRecord, Order) { nil } }
+    assert_raises(ArgumentError) { ActiveRecord::XA.transaction(PrimaryRecord, Order) { nil } }
   end
 
   def test_connections_are_usable_normally_afterwards
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; TrackerEvent.create! }
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; TrackerEvent.create! }
     Order.transaction { Order.create! }
     TrackerEvent.create!
     assert_equal [ 2, 2 ], counts
@@ -287,7 +287,7 @@ class TransactionTest < ActiveXATestCase
 
   def test_connections_go_back_to_the_pool_afterwards
     leased = in_new_thread do
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; TrackerEvent.create! }
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; TrackerEvent.create! }
       leased_connections
     end
 
@@ -297,7 +297,7 @@ class TransactionTest < ActiveXATestCase
   def test_connections_go_back_to_the_pool_after_a_rollback
     leased = in_new_thread do
       assert_raises(RuntimeError) do
-        ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; raise "boom" }
+        ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; raise "boom" }
       end
       leased_connections
     end
@@ -308,7 +308,7 @@ class TransactionTest < ActiveXATestCase
   def test_a_connection_the_caller_already_holds_stays_with_the_caller
     kept = in_new_thread do
       held = PrimaryRecord.lease_connection
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; TrackerEvent.create! }
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; TrackerEvent.create! }
       leased_connections == [ held ]
     ensure
       PrimaryRecord.connection_pool.release_connection
@@ -320,8 +320,8 @@ class TransactionTest < ActiveXATestCase
   def test_refusing_an_open_transaction_releases_the_connections_already_taken
     leased = in_new_thread do
       TrackerRecord.transaction do
-        assert_raises(ActiveXA::TransactionAlreadyOpen) do
-          ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create! }
+        assert_raises(ActiveRecord::XA::TransactionAlreadyOpen) do
+          ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { Order.create! }
         end
       end
       leased_connections
@@ -340,7 +340,7 @@ class TransactionTest < ActiveXATestCase
     end
 
     def early_return_helper
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
         Order.create!(name: "order")
         TrackerEvent.create!(name: "tracked")
         return

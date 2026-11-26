@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ActiveXA
+module ActiveRecord::XA
 
   # Runs one global transaction.
   #
@@ -23,7 +23,7 @@ module ActiveXA
     # @param config [Configuration] settings for logging and notification
     # @raise [ArgumentError] unless the classes span at least two databases
     # @return [Coordinator] the new coordinator
-    def initialize(record_classes, log:, config: ActiveXA.config)
+    def initialize(record_classes, log:, config: ActiveRecord::XA.config)
       @pools = record_classes.map(&:connection_pool).uniq
       @log = log
       @config = config
@@ -33,7 +33,7 @@ module ActiveXA
       @outcome = :rolled_back
 
       if @pools.size < 2
-        raise ArgumentError, "ActiveXA.transaction needs classes on at least two different databases"
+        raise ArgumentError, "ActiveRecord::XA.transaction needs classes on at least two different databases"
       end
     end
 
@@ -68,7 +68,7 @@ module ActiveXA
         pool.with_connection do |connection|
           if connection.transaction_open?
             raise TransactionAlreadyOpen,
-                  "#{ pool.db_config.name } already has an open transaction; ActiveXA must open the outermost one"
+                  "#{ pool.db_config.name } already has an open transaction; ActiveRecord::XA must open the outermost one"
           end
 
           enlist(connection, Xid.new(@gtrid, Xid.bqual(index, pool.db_config.name))) do
@@ -88,13 +88,13 @@ module ActiveXA
       def enlist(connection, xid)
         branch = Branch.new(connection, xid)
         @branches << branch
-        connection.active_xa_branch = branch
+        connection.xa_branch = branch
         default_isolation = ActiveRecord.default_transaction_isolation_level
 
         connection.pool.with_pool_transaction_isolation_level(default_isolation, false) do
           connection.transaction do
             branch.ar_transaction = connection.current_transaction
-            branch.ar_transaction.active_xa_hold_callbacks!
+            branch.ar_transaction.xa_hold_callbacks!
             yield
             # Rails swallows ActiveRecord::Rollback where the innermost transaction ends.
             # Every participant has to roll back, so each level raises it again for the one outside it.
@@ -103,7 +103,7 @@ module ActiveXA
           end
         end
       ensure
-        connection.active_xa_branch = nil
+        connection.xa_branch = nil
         discard_connection(connection) if branch&.in_doubt?
       end
 
@@ -166,9 +166,9 @@ module ActiveXA
       # @param in_progress [Array<Branch>] branches whose pass is running, which are never revisited
       # @return [void]
       def before_commit_pass(branch, finished, in_progress)
-        branch.ar_transaction.active_xa_run_before_commit! do
+        branch.ar_transaction.xa_run_before_commit! do
           (finished - in_progress).each do |other|
-            next unless other.ar_transaction.active_xa_before_commit_pending?
+            next unless other.ar_transaction.xa_before_commit_pending?
 
             before_commit_pass(other, finished, in_progress + [ other ])
           end
@@ -313,7 +313,7 @@ module ActiveXA
         branches.each do |branch|
           branch.rollback!
         rescue => e
-          @config.logger&.error("ActiveXA: could not roll back #{ branch.xid }, leaving it to recovery: #{ e.message }")
+          @config.logger&.error("ActiveRecord::XA: could not roll back #{ branch.xid }, leaving it to recovery: #{ e.message }")
           branch.mark_in_doubt!
         end
       end
@@ -325,7 +325,7 @@ module ActiveXA
       def complete_log
         @log.complete!(@gtrid)
       rescue => e
-        @config.logger&.warn("ActiveXA: could not clear decision #{ @gtrid }: #{ e.message }")
+        @config.logger&.warn("ActiveRecord::XA: could not clear decision #{ @gtrid }: #{ e.message }")
       end
 
       # Reports branches that are committed by decision but failed to apply XA COMMIT.
@@ -335,16 +335,16 @@ module ActiveXA
       # @return [void]
       def report_incomplete(failures)
         details = failures.map { |b, e| "#{ b.xid }: #{ e.class }: #{ e.message }" }.join("; ")
-        @config.logger&.error("ActiveXA: #{ @gtrid } committed but not yet applied everywhere: #{ details }")
+        @config.logger&.error("ActiveRecord::XA: #{ @gtrid } committed but not yet applied everywhere: #{ details }")
 
         @config.on_incomplete_commit&.call(@gtrid, failures)
       rescue => e
-        @config.logger&.error("ActiveXA: on_incomplete_commit raised #{ e.class }: #{ e.message }")
+        @config.logger&.error("ActiveRecord::XA: on_incomplete_commit raised #{ e.class }: #{ e.message }")
       end
 
       # Runs after_commit or after_rollback callbacks, innermost transaction first as Rails would.
       # Which of the two follows how the global transaction ended, not how each Rails block happened to exit; when the outcome is not known, neither runs.
-      # By now every participant's transaction has closed, so a callback can use any of the databases, or start another ActiveXA transaction.
+      # By now every participant's transaction has closed, so a callback can use any of the databases, or start another ActiveRecord::XA transaction.
       # One database's callbacks failing does not cost the others theirs; the first error is raised once all have run.
       #
       # @return [void]
@@ -353,7 +353,7 @@ module ActiveXA
         error = nil
 
         @branches.reverse_each do |branch|
-          branch.ar_transaction&.active_xa_release_callbacks!(action)
+          branch.ar_transaction&.xa_release_callbacks!(action)
         rescue => e
           error ||= e
         end
@@ -368,7 +368,7 @@ module ActiveXA
       def discard_connection(connection)
         connection.disconnect!
       rescue => e
-        @config.logger&.warn("ActiveXA: error discarding connection: #{ e.message }")
+        @config.logger&.warn("ActiveRecord::XA: error discarding connection: #{ e.message }")
       end
   end
 end

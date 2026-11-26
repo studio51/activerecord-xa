@@ -3,7 +3,7 @@
 require "digest"
 require "json"
 
-module ActiveXA
+module ActiveRecord::XA
 
   # Durable record of how global transactions were decided, one row per gtrid.
   #
@@ -16,7 +16,7 @@ module ActiveXA
   # Rows are written on a connection checked out separately from the pool, so they are never part of the XA transaction, even when the table lives in a participant's database.
   #
   class DecisionLog
-    TABLE = "active_xa_decisions".freeze # the log's table name
+    TABLE = "xa_decisions".freeze # the log's table name
 
     # The DDL for the log's table, for a migration on the decision log's database.
     #
@@ -35,7 +35,7 @@ module ActiveXA
     attr_reader :namespace # eight hex digits that go into every gtrid this log decides
 
     # Creates a log on a pool.
-    # The namespace tells this log's transactions from those of any other ActiveXA installation whose branches show up in the same XA RECOVER, such as another application on a shared server or another environment of this one.
+    # The namespace tells this log's transactions from those of any other ActiveRecord::XA installation whose branches show up in the same XA RECOVER, such as another application on a shared server or another environment of this one.
     # By default it comes from the name of the database the log lives in, which is the same from every app server.
     #
     # @param pool [ActiveRecord::ConnectionAdapters::ConnectionPool] the pool of the database holding the table
@@ -145,7 +145,7 @@ module ActiveXA
           c.insert(
             "INSERT INTO #{ TABLE } (gtrid, outcome, participants, created_at) VALUES " \
             "(#{ c.quote(gtrid) }, #{ c.quote(outcome.to_s) }, #{ c.quote(JSON.generate(participants)) }, UTC_TIMESTAMP(6))",
-            "ActiveXA"
+            "ActiveRecord::XA"
           )
         end
       end

@@ -4,25 +4,25 @@ require_relative "test_helper"
 
 # What happens around the commit decision: the moment a transaction stops
 # being this process's to roll back.
-class DecisionTest < ActiveXATestCase
+class DecisionTest < XATestCase
   def test_recovery_that_gets_in_before_the_decision_makes_the_coordinator_roll_back
     error = nil
     gtrid = long_running_transaction do
       with_decision_log(before: ->(_) { recover(grace: 60) }) do
-        error = assert_raises(ActiveXA::DecisionLogFailed) { write_to_both }
+        error = assert_raises(ActiveRecord::XA::DecisionLogFailed) { write_to_both }
       end
     end
 
     assert_match(/recovery rolled .* back/, error.message)
     assert_equal [ 0, 0 ], counts
     assert_empty prepared_xids(PrimaryRecord)
-    assert_equal :abort, ActiveXA.decision_log.outcome(gtrid)
+    assert_equal :abort, ActiveRecord::XA.decision_log.outcome(gtrid)
     assert_includes Events.log, [ :order_after_rollback ]
   end
 
   def test_recovery_that_arrives_after_the_decision_commits_what_the_coordinator_decided
     reported = []
-    ActiveXA.config.on_incomplete_commit = ->(gtrid, failures) { reported << gtrid }
+    ActiveRecord::XA.config.on_incomplete_commit = ->(gtrid, failures) { reported << gtrid }
 
     gtrid = long_running_transaction do
       with_decision_log(after: ->(_) { recover(grace: 60) }) { write_to_both }
@@ -38,7 +38,7 @@ class DecisionTest < ActiveXATestCase
     order = nil
 
     assert_raises(Stop) do
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
         order = Order.create!(name: "order")
         TrackerEvent.create!(name: "tracked")
       end
@@ -95,19 +95,19 @@ class DecisionTest < ActiveXATestCase
 
     assert_equal [ 1, 1 ], counts
     assert_empty prepared_xids(PrimaryRecord)
-    assert_empty ActiveXA.decision_log.entries
+    assert_empty ActiveRecord::XA.decision_log.entries
   end
 
   def test_a_decision_that_could_not_be_logged_rolls_everything_back_for_good
     gtrid = nil
     with_decision_log(before: ->(g) { gtrid = g; raise ActiveRecord::ConnectionFailed, "log is down" }) do
-      error = assert_raises(ActiveXA::DecisionLogFailed) { write_to_both }
+      error = assert_raises(ActiveRecord::XA::DecisionLogFailed) { write_to_both }
       assert_match(/log is down/, error.message)
     end
 
     assert_equal [ 0, 0 ], counts
     assert_empty prepared_xids(PrimaryRecord)
-    assert_equal :abort, ActiveXA.decision_log.outcome(gtrid), "so that a commit row arriving late is refused"
+    assert_equal :abort, ActiveRecord::XA.decision_log.outcome(gtrid), "so that a commit row arriving late is refused"
     assert_includes Events.log, [ :order_after_rollback ]
   end
 
@@ -115,7 +115,7 @@ class DecisionTest < ActiveXATestCase
     with_decision_log(before: ->(_) { raise ActiveRecord::ConnectionTimeoutError, "no connection to the log" }) do |log|
       def log.settle!(*) = raise("the log should not be asked: nothing was sent")
 
-      error = assert_raises(ActiveXA::DecisionLogFailed) { write_to_both }
+      error = assert_raises(ActiveRecord::XA::DecisionLogFailed) { write_to_both }
       assert_match(/no connection to the log/, error.message)
     end
 
@@ -128,7 +128,7 @@ class DecisionTest < ActiveXATestCase
     with_decision_log(before: ->(_) { raise ActiveRecord::ConnectionFailed, "log is down" }) do |log|
       def log.settle!(*) = raise(ActiveRecord::ConnectionFailed, "still down")
 
-      error = assert_raises(ActiveXA::OutcomeUnknown) { write_to_both }
+      error = assert_raises(ActiveRecord::XA::OutcomeUnknown) { write_to_both }
       assert_match(/log is down.*still down/, error.message)
     end
 
@@ -140,11 +140,11 @@ class DecisionTest < ActiveXATestCase
   end
 
   def test_a_failing_on_incomplete_commit_callback_does_not_fail_the_transaction
-    ActiveXA.config.on_incomplete_commit = ->(*) { raise "pager is down" }
+    ActiveRecord::XA.config.on_incomplete_commit = ->(*) { raise "pager is down" }
     FaultInjection.rules = { commit!: /tracker/ }
     order = nil
 
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       order = Order.create!(name: "order")
       TrackerEvent.create!(name: "tracked")
     end
@@ -160,7 +160,7 @@ class DecisionTest < ActiveXATestCase
     end
 
     def write_to_both
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
         Order.create!(name: "order")
         TrackerEvent.create!(name: "tracked")
       end

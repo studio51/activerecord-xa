@@ -4,26 +4,26 @@
 
 - Ruby 4.0 or later, Rails 8.1.
 - MySQL 8.0.30 or later with InnoDB. Earlier versions can leave XA state and the binary log inconsistent after a crash.
-- Row-based or mixed binary logging, and no replication filters on the tables ActiveXA writes.
+- Row-based or mixed binary logging, and no replication filters on the tables ActiveRecord::XA writes.
 - The database user that runs recovery needs `XA_RECOVER_ADMIN`. Some managed hosts restrict external XA; check yours.
 
 ## In a Rails application
 
 ```ruby
 # Gemfile
-gem "active_xa"
+gem "activerecord-xa"
 ```
 
 ```sh
 bundle install
-bin/rails generate active_xa:install
+bin/rails generate xa:install
 bin/rails db:migrate
 ```
 
 The generator writes:
 
-- `config/initializers/active_xa.rb`, where you name the decision log's class and the participating classes;
-- a migration that creates the `active_xa_decisions` table. Pass `--database NAME` to put it in another database's migrations path, if the log should live there.
+- `config/initializers/xa.rb`, where you name the decision log's class and the participating classes;
+- a migration that creates the `xa_decisions` table. Pass `--database NAME` to put it in another database's migrations path, if the log should live there.
 
 A typical multi-database setup:
 
@@ -52,8 +52,8 @@ end
 ```
 
 ```ruby
-# config/initializers/active_xa.rb
-ActiveXA.configure do |config|
+# config/initializers/xa.rb
+ActiveRecord::XA.configure do |config|
   config.decision_log_class = "ApplicationRecord"
   config.participants = %w[ApplicationRecord LedgerRecord]
   config.logger = Rails.logger
@@ -66,11 +66,11 @@ Grant the recovery privilege once per server:
 GRANT XA_RECOVER_ADMIN ON *.* TO 'app'@'%';
 ```
 
-Schedule recovery, every minute is a good default: `bin/rails active_xa:recover` from cron, or a Solid Queue recurring task with `command: "ActiveXA.recover!"`.
+Schedule recovery, every minute is a good default: `bin/rails xa:recover` from cron, or a Solid Queue recurring task with `command: "ActiveRecord::XA.recover!"`.
 
-### Testing an application that uses ActiveXA
+### Testing an application that uses ActiveRecord::XA
 
-ActiveXA must open the outermost transaction on every participant, so code that calls it cannot run inside Rails' transactional tests. Turn them off for those tests and clean up by truncation:
+ActiveRecord::XA must open the outermost transaction on every participant, so code that calls it cannot run inside Rails' transactional tests. Turn them off for those tests and clean up by truncation:
 
 ```ruby
 class TransferTest < ActiveSupport::TestCase

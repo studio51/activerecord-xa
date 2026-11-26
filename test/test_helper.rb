@@ -11,7 +11,7 @@ $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
 ENV["RAILS_ENV"] = "test"
 require "minitest/autorun"
 require "minitest/mock"
-require "active_xa"
+require "active_record/xa"
 
 base = {
   adapter: "mysql2",
@@ -112,14 +112,14 @@ end
 # below forever. Clear them here, and again before every test.
 module StrayXA
   def self.prepared(klass)
-    klass.connection.select_rows("XA RECOVER").select { |row| row[0].to_i == ActiveXA::Xid::FORMAT_ID }
+    klass.connection.select_rows("XA RECOVER").select { |row| row[0].to_i == ActiveRecord::XA::Xid::FORMAT_ID }
   end
 
   def self.rollback!
     [ PrimaryRecord, TrackerRecord ].each do |klass|
       prepared(klass).each do |_format_id, gtrid_length, bqual_length, data|
         gl = gtrid_length.to_i
-        xid = ActiveXA::Xid.new(data.byteslice(0, gl), data.byteslice(gl, bqual_length.to_i))
+        xid = ActiveRecord::XA::Xid.new(data.byteslice(0, gl), data.byteslice(gl, bqual_length.to_i))
         klass.connection.execute("XA ROLLBACK #{ xid.to_sql(klass.connection) }")
       end
     end
@@ -135,13 +135,13 @@ TrackerRecord.connection.execute("DROP TABLE IF EXISTS tracker_events")
 TrackerRecord.connection.execute(
   "CREATE TABLE tracker_events (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(50)) ENGINE=InnoDB"
 )
-PrimaryRecord.connection.execute("DROP TABLE IF EXISTS #{ ActiveXA::DecisionLog::TABLE }")
+PrimaryRecord.connection.execute("DROP TABLE IF EXISTS #{ ActiveRecord::XA::DecisionLog::TABLE }")
 
-ActiveXA.configure do |c|
+ActiveRecord::XA.configure do |c|
   c.decision_log_class = PrimaryRecord
   c.logger = Logger.new(nil)
 end
-ActiveXA.decision_log.create_table!
+ActiveRecord::XA.decision_log.create_table!
 
 # Lets tests make a specific XA step fail on a specific database.
 module FaultInjection
@@ -163,21 +163,21 @@ module FaultInjection
     end
   end
 end
-ActiveXA::Branch.prepend(FaultInjection)
+ActiveRecord::XA::Branch.prepend(FaultInjection)
 
 # Not a StandardError: stands in for Interrupt, or for the exception a
 # request timeout raises into a thread.
 class Stop < Exception; end
 
-class ActiveXATestCase < Minitest::Test
+class XATestCase < Minitest::Test
   def setup
     FaultInjection.rules = {}
     Events.clear
     StrayXA.rollback!
     Order.delete_all
     TrackerEvent.delete_all
-    PrimaryRecord.connection.execute("DELETE FROM #{ ActiveXA::DecisionLog::TABLE }")
-    ActiveXA.config.on_incomplete_commit = nil
+    PrimaryRecord.connection.execute("DELETE FROM #{ ActiveRecord::XA::DecisionLog::TABLE }")
+    ActiveRecord::XA.config.on_incomplete_commit = nil
   end
 
   def counts
@@ -198,19 +198,19 @@ class ActiveXATestCase < Minitest::Test
     [ PrimaryRecord, TrackerRecord ].filter_map { |klass| klass.connection_pool.active_connection? }
   end
 
-  def new_gtrid(namespace = ActiveXA.decision_log.namespace)
-    ActiveXA::Xid.generate_gtrid(namespace)
+  def new_gtrid(namespace = ActiveRecord::XA.decision_log.namespace)
+    ActiveRecord::XA::Xid.generate_gtrid(namespace)
   end
 
   def recover(grace:, abort_retention: 3600)
-    ActiveXA::Recovery.new([ PrimaryRecord, TrackerRecord ], log: ActiveXA.decision_log,
+    ActiveRecord::XA::Recovery.new([ PrimaryRecord, TrackerRecord ], log: ActiveRecord::XA.decision_log,
                                                            grace:, abort_retention:).run
   end
 
   # Runs the block with a decision log that calls +before+ and +after+
   # around the commit insert, and yields that log.
   def with_decision_log(before: nil, after: nil)
-    log = ActiveXA.decision_log
+    log = ActiveRecord::XA.decision_log
     log.singleton_class.prepend(Module.new do
       define_method(:record_commit!) do |gtrid, participants|
         before&.call(gtrid)
@@ -218,14 +218,14 @@ class ActiveXATestCase < Minitest::Test
         after&.call(gtrid)
       end
     end)
-    ActiveXA.stub(:decision_log, log) { yield log }
+    ActiveRecord::XA.stub(:decision_log, log) { yield log }
   end
 
   # Runs the block as a transaction that started an hour ago, well past any
   # grace period, and returns its gtrid.
   def long_running_transaction(&block)
     gtrid = new_gtrid.sub(/-\d+-/) { "-#{ ((Time.now.to_f - 3600) * 1000).to_i }-" }
-    ActiveXA::Xid.stub(:generate_gtrid, gtrid, &block)
+    ActiveRecord::XA::Xid.stub(:generate_gtrid, gtrid, &block)
     gtrid
   end
 end

@@ -1,10 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# An IRB session with ActiveXA loaded.
+# An IRB session with ActiveRecord::XA loaded.
 #
 require "bundler/setup"
 require "irb"
-require "active_xa"
+require "active_record/xa"
 
 IRB.start(__FILE__)

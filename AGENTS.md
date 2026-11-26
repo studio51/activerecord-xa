@@ -1,4 +1,4 @@
-# AGENTS.md: ActiveXA
+# AGENTS.md: ActiveRecord::XA
 
 Instructions for AI coding agents (Claude Code and friends) working in this repo.
 Humans: this is also a fine quick-orientation read.

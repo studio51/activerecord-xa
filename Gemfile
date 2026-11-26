@@ -4,7 +4,7 @@ source "https://rubygems.org"
 
 gemspec
 
-# Everything below is for working on ActiveXA, not for using it.
+# Everything below is for working on ActiveRecord::XA, not for using it.
 #
 group :development, :test do
   gem "rake"

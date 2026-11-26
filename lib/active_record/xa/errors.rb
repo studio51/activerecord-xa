@@ -1,12 +1,12 @@
 # frozen_string_literal: true
 
-module ActiveXA
+module ActiveRecord::XA
 
-  # Base class of every error ActiveXA raises.
+  # Base class of every error ActiveRecord::XA raises.
   #
   class Error < StandardError; end
 
-  # ActiveXA is not configured, e.g. no decision log class is set.
+  # ActiveRecord::XA is not configured, e.g. no decision log class is set.
   #
   class ConfigurationError < Error; end
 
