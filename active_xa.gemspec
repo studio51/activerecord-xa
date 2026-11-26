@@ -8,7 +8,7 @@ Gem::Specification.new do |s|
   s.summary     = "Two-phase commit across MySQL databases for Active Record"
   s.description = "Atomic transactions across multiple MySQL databases in Rails, " \
                   "using MySQL XA, with a decision log and crash recovery."
-  s.authors     = ["Vlad"]
+  s.authors     = [ "Vlad" ]
   s.license     = "MIT"
   s.files       = Dir["lib/**/*.rb", "README.md", "LICENSE"]
   s.required_ruby_version = ">= 3.2"

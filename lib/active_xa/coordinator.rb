@@ -16,6 +16,7 @@ module ActiveXA
   # Any failure before the decision is logged rolls back every branch.
   # From the moment the decision may be in the log, nothing here rolls a
   # branch back: what could not be committed is left :in_doubt for recovery.
+  #
   class Coordinator
     def initialize(record_classes, log:, config: ActiveXA.config)
       @pools = record_classes.map(&:connection_pool).uniq
@@ -46,14 +47,16 @@ module ActiveXA
       # connection is borrowed only while its transaction is open:
       # with_connection reuses one the caller already holds, and otherwise
       # hands it back to the pool afterwards, as Model.transaction does.
+      #
       def nest(remaining, &block)
         return block.call if remaining.empty?
 
         pool, index = remaining.first
+
         pool.with_connection do |connection|
           if connection.transaction_open?
             raise TransactionAlreadyOpen,
-                  "#{pool.db_config.name} already has an open transaction; ActiveXA must open the outermost one"
+                  "#{ pool.db_config.name } already has an open transaction; ActiveXA must open the outermost one"
           end
 
           enlist(connection, Xid.new(@gtrid, Xid.bqual(index, pool.db_config.name))) do
@@ -71,6 +74,7 @@ module ActiveXA
         # is what applies ActiveRecord.default_transaction_isolation_level,
         # and with that default set Rails refuses every save inside a
         # transaction that was opened without it.
+        #
         default_isolation = ActiveRecord.default_transaction_isolation_level
         connection.pool.with_pool_transaction_isolation_level(default_isolation, false) do
           connection.transaction do
@@ -80,6 +84,7 @@ module ActiveXA
             # Rails swallows ActiveRecord::Rollback where the innermost
             # transaction ends. Every participant has to roll back, so each
             # level raises it again for the one outside it.
+            #
             raise ActiveRecord::Rollback if @rollback_requested
           end
         end
@@ -87,6 +92,7 @@ module ActiveXA
         # Before the connection can reach anyone else through the pool. One
         # whose branch was left for recovery may still be holding it, so it
         # is closed to make the server let go.
+        #
         connection.active_xa_branch = nil
         discard_connection(connection) if branch&.in_doubt?
       end
@@ -94,6 +100,7 @@ module ActiveXA
       # Rails commits when a transaction block exits early via return, break
       # or throw, and rolls back when the block raises or its thread is being
       # killed. So do we.
+      #
       def run_block
         outcome = :left_early
         result = yield
@@ -112,6 +119,7 @@ module ActiveXA
         run_before_commit_callbacks
 
         active = @branches.select(&:started?)
+
         case active.size
         when 0 then @outcome = :committed
         when 1 then commit_one_phase(active.first)
@@ -128,10 +136,12 @@ module ActiveXA
       # of its own, so the branch gets another pass. A branch still in the
       # middle of a pass does not, which is what Rails does too and is what
       # keeps this finite.
+      #
       def run_before_commit_callbacks
         finished = []
+
         @branches.reverse_each do |branch|
-          before_commit_pass(branch, finished, [branch])
+          before_commit_pass(branch, finished, [ branch ])
           finished << branch
         end
       end
@@ -141,7 +151,7 @@ module ActiveXA
           (finished - in_progress).each do |other|
             next unless other.ar_transaction.active_xa_before_commit_pending?
 
-            before_commit_pass(other, finished, in_progress + [other])
+            before_commit_pass(other, finished, in_progress + [ other ])
           end
         end
       end
@@ -157,6 +167,7 @@ module ActiveXA
       # use any of the databases, or start another ActiveXA transaction, as
       # it could after a plain one. One database's callbacks failing does not
       # cost the others theirs; the first error is raised once all have run.
+      #
       def release_callbacks
         action = { committed: :commit_records, rolled_back: :rollback_records }[@outcome]
         error = nil
@@ -165,6 +176,7 @@ module ActiveXA
         rescue => e
           error ||= e
         end
+
         raise error if error
       end
 
@@ -173,11 +185,12 @@ module ActiveXA
         branch.commit_one_phase!
         @outcome = :committed
       rescue => e
-        rollback_all([branch])
+        rollback_all([ branch ])
         # If the rollback failed as well, the commit may have gone through
         # after all, and the outcome stays unknown.
+        #
         @outcome = :rolled_back if branch.state == :rolled_back
-        raise PrepareFailed, "one-phase commit failed on #{branch.xid}: #{e.message}"
+        raise PrepareFailed, "one-phase commit failed on #{ branch.xid }: #{ e.message }"
       end
 
       def two_phase_commit(active)
@@ -185,7 +198,7 @@ module ActiveXA
           active.each(&:end_and_prepare!)
         rescue => e
           rollback_all(active)
-          raise PrepareFailed, "prepare failed: #{e.message}"
+          raise PrepareFailed, "prepare failed: #{ e.message }"
         end
 
         log_commit_decision(active)
@@ -193,11 +206,12 @@ module ActiveXA
         # The decision is durable: from here the transaction IS committed.
         # Failures are not raised, since the caller retrying would duplicate
         # work. They're reported, and the branch stays in doubt for recovery.
+        #
         failures = active.filter_map do |branch|
           branch.commit!
           nil
         rescue => e
-          [branch, e]
+          [ branch, e ]
         end
 
         if failures.empty?
@@ -211,6 +225,7 @@ module ActiveXA
       # happens to this process next. So the branches stop being ours to roll
       # back first: an exception or a killed thread from here on leaves them
       # prepared for recovery instead of undoing half a committed transaction.
+      #
       def log_commit_decision(active)
         @outcome = :unknown
         active.each(&:mark_in_doubt!)
@@ -219,6 +234,7 @@ module ActiveXA
       rescue ActiveRecord::ConnectionNotEstablished => e
         # No connection to the log could be had (it is down, or its pool is
         # exhausted), so the insert was never sent and nothing is in doubt.
+        #
         abandon_commit(active, e)
       rescue => e
         settle_failed_decision(active, e)
@@ -228,12 +244,13 @@ module ActiveXA
       # written and its acknowledgement lost, or recovery may have decided
       # first. The log settles it. We ask for "abort", which the primary key
       # refuses if the commit row is there, and go with whichever stands.
+      #
       def settle_failed_decision(active, error)
         standing = begin
           @log.settle!(@gtrid)
         rescue => e
-          raise OutcomeUnknown, "could not log the commit decision for #{@gtrid} (#{error.message}) " \
-                                "or find out whether it was logged (#{e.message}); recovery will finish the transaction"
+          raise OutcomeUnknown, "could not log the commit decision for #{ @gtrid } (#{ error.message }) " \
+                                "or find out whether it was logged (#{ e.message }); recovery will finish the transaction"
         end
 
         if standing == :commit
@@ -247,15 +264,16 @@ module ActiveXA
         active.each(&:release_from_doubt!)
         rollback_all(active)
         @outcome = :rolled_back
+
         raise DecisionLogFailed, decision_failure_message(error)
       end
 
       def decision_failure_message(error)
         if error.is_a?(ActiveRecord::RecordNotUnique)
-          "recovery rolled #{@gtrid} back before its commit decision was logged; " \
+          "recovery rolled #{ @gtrid } back before its commit decision was logged; " \
             "the transaction ran for longer than recovery_grace_period"
         else
-          "could not log commit decision for #{@gtrid}: #{error.message}"
+          "could not log commit decision for #{ @gtrid }: #{ error.message }"
         end
       end
 
@@ -266,7 +284,8 @@ module ActiveXA
           # Presumed abort: with no commit decision in the log, recovery rolls
           # it back. Marking it stops Rails trying again as the blocks unwind,
           # which would only bury the error that brought us here.
-          @config.logger&.error("ActiveXA: could not roll back #{branch.xid}, leaving it to recovery: #{e.message}")
+          #
+          @config.logger&.error("ActiveXA: could not roll back #{ branch.xid }, leaving it to recovery: #{ e.message }")
           branch.mark_in_doubt!
         end
       end
@@ -275,23 +294,25 @@ module ActiveXA
         @log.complete!(@gtrid)
       rescue => e
         # Harmless: recovery prunes decisions with no prepared branches left.
-        @config.logger&.warn("ActiveXA: could not clear decision #{@gtrid}: #{e.message}")
+        #
+        @config.logger&.warn("ActiveXA: could not clear decision #{ @gtrid }: #{ e.message }")
       end
 
       def report_incomplete(failures)
-        details = failures.map { |b, e| "#{b.xid}: #{e.class}: #{e.message}" }.join("; ")
-        @config.logger&.error("ActiveXA: #{@gtrid} committed but not yet applied everywhere: #{details}")
+        details = failures.map { |b, e| "#{ b.xid }: #{ e.class }: #{ e.message }" }.join("; ")
+        @config.logger&.error("ActiveXA: #{ @gtrid } committed but not yet applied everywhere: #{ details }")
         @config.on_incomplete_commit&.call(@gtrid, failures)
       rescue => e
         # The transaction is committed. A notifier that fails must not make
         # it look otherwise to the caller.
-        @config.logger&.error("ActiveXA: on_incomplete_commit raised #{e.class}: #{e.message}")
+        #
+        @config.logger&.error("ActiveXA: on_incomplete_commit raised #{ e.class }: #{ e.message }")
       end
 
       def discard_connection(connection)
         connection.disconnect!
       rescue => e
-        @config.logger&.warn("ActiveXA: error discarding connection: #{e.message}")
+        @config.logger&.warn("ActiveXA: error discarding connection: #{ e.message }")
       end
   end
 end

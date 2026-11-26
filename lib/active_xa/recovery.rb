@@ -24,10 +24,12 @@ module ActiveXA
   # carrying this decision log's namespace are touched: another
   # installation's transactions are decided in its own log, and having no
   # decision for them here says nothing about what it decided.
+  #
   class Recovery
     # errors holds [subject, exception] pairs. The subject is the Xid that
     # could not be resolved, the name of a database that could not be asked,
     # or :prune.
+    #
     Report = Struct.new(:committed, :rolled_back, :skipped, :pruned, :errors) do
       def initialize = super([], [], [], [], [])
     end
@@ -59,16 +61,19 @@ module ActiveXA
       rescue => e
         # A database that is down, or whose user lacks XA_RECOVER_ADMIN, must
         # not keep the branches on the others waiting.
-        report.errors << [pool.db_config.name, e]
+        #
+        report.errors << [ pool.db_config.name, e ]
         complete = false
       end
 
       # Without an answer from every database there is no telling which
       # decisions are finished, so nothing is pruned on this run.
+      #
       if complete
         outstanding = (report.skipped + report.errors.map(&:first).grep(Xid)).map(&:gtrid)
         prune_log(started, outstanding.uniq, report)
       end
+
       report
     end
 
@@ -81,19 +86,20 @@ module ActiveXA
 
         case outcome_of(xid.gtrid)
         when :commit
-          connection.execute("XA COMMIT #{xid.to_sql(connection)}")
+          connection.execute("XA COMMIT #{ xid.to_sql(connection) }")
           report.committed << xid
         when :abort
-          connection.execute("XA ROLLBACK #{xid.to_sql(connection)}")
+          connection.execute("XA ROLLBACK #{ xid.to_sql(connection) }")
           report.rolled_back << xid
         end
       rescue => e
-        report.errors << [xid, e]
+        report.errors << [ xid, e ]
       end
 
       # Settled once per run, so every branch of a transaction gets the same
       # answer. With nothing in the log the answer is "abort", and it is
       # written down before anything is rolled back.
+      #
       def outcome_of(gtrid)
         @outcomes[gtrid] ||= @log.outcome(gtrid) || @log.settle!(gtrid)
       end
@@ -112,6 +118,7 @@ module ActiveXA
       # Either way, only a run that was given every database a transaction
       # used has seen all its branches. A decision naming any other database
       # is left for a run that covers it.
+      #
       def prune_log(started, outstanding_gtrids, report)
         covered = @pools.map { |pool| pool.db_config.name }
 
@@ -123,15 +130,17 @@ module ActiveXA
           report.pruned << gtrid
         end
       rescue => e
-        report.errors << [:prune, e]
+        report.errors << [ :prune, e ]
       end
 
       def prepared_xids(connection)
         rows = connection.uncached { connection.select_rows("XA RECOVER") }
+
         rows.filter_map do |format_id, gtrid_length, bqual_length, data|
           next unless Integer(format_id) == Xid::FORMAT_ID
 
           # The lengths count bytes, and data is not always single-byte.
+          #
           gl = Integer(gtrid_length)
           xid = Xid.new(data.byteslice(0, gl), data.byteslice(gl, Integer(bqual_length)))
           xid if Xid.namespace(xid.gtrid) == @log.namespace

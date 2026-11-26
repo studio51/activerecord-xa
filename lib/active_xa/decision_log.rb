@@ -21,12 +21,13 @@ module ActiveXA
   # Rows are written on a connection checked out separately from the pool,
   # so they are never part of the XA transaction even when the table lives
   # in a participant's database.
+  #
   class DecisionLog
     TABLE = "active_xa_decisions"
 
     def self.create_table_sql
       <<~SQL
-        CREATE TABLE IF NOT EXISTS #{TABLE} (
+        CREATE TABLE IF NOT EXISTS #{ TABLE } (
           gtrid VARCHAR(64) NOT NULL PRIMARY KEY,
           outcome VARCHAR(8) NOT NULL,
           participants TEXT NOT NULL,
@@ -39,10 +40,12 @@ module ActiveXA
     # installation whose branches show up in the same XA RECOVER: another
     # application on a shared server, or another environment of this one.
     # It goes into every gtrid, and recovery leaves other namespaces alone.
+    #
     attr_reader :namespace
 
     # By default the namespace comes from the name of the database the log
     # lives in, which is the same from every app server.
+    #
     def initialize(pool, namespace: nil)
       @pool = pool
       @namespace = Digest::SHA256.hexdigest(namespace || pool.db_config.database.to_s)[0, 8]
@@ -55,35 +58,38 @@ module ActiveXA
     # +participants+ names the databases that hold a branch, so that recovery
     # can tell when it has looked at all of them. Raises
     # ActiveRecord::RecordNotUnique if the gtrid is already decided.
+    #
     def record_commit!(gtrid, participants)
       insert(gtrid, :commit, participants)
     end
 
     # Decides "abort" unless a decision is already there. Returns the
     # decision that stands, :abort or :commit.
+    #
     def settle!(gtrid)
       insert(gtrid, :abort, [])
       :abort
     rescue ActiveRecord::RecordNotUnique
-      outcome(gtrid) or raise Error, "the decision for #{gtrid} was removed while it was being read"
+      outcome(gtrid) or raise Error, "the decision for #{ gtrid } was removed while it was being read"
     end
 
     def outcome(gtrid)
       with_connection do |c|
-        c.select_value("SELECT outcome FROM #{TABLE} WHERE gtrid = #{c.quote(gtrid)}")&.to_sym
+        c.select_value("SELECT outcome FROM #{ TABLE } WHERE gtrid = #{ c.quote(gtrid) }")&.to_sym
       end
     end
 
     def complete!(gtrid)
-      with_connection { |c| c.delete("DELETE FROM #{TABLE} WHERE gtrid = #{c.quote(gtrid)}") }
+      with_connection { |c| c.delete("DELETE FROM #{ TABLE } WHERE gtrid = #{ c.quote(gtrid) }") }
     end
 
     def entries
-      with_connection { |c| c.select_values("SELECT gtrid FROM #{TABLE}") }
+      with_connection { |c| c.select_values("SELECT gtrid FROM #{ TABLE }") }
     end
 
     # The log database's clock, which also stamps the rows. Ages are worked
     # out against it in SQL, so no other clock comes into pruning.
+    #
     def now
       with_connection { |c| c.select_value("SELECT CAST(UTC_TIMESTAMP(6) AS CHAR)") }
     end
@@ -91,23 +97,25 @@ module ActiveXA
     # Decisions old enough to prune as of +time+ (a value from #now): commits
     # after +commit_age+ seconds, abort markers after +abort_age+. Returns
     # [gtrid, participants] pairs.
+    #
     def expired(time, commit_age:, abort_age:)
       rows = with_connection do |c|
         c.select_rows(<<~SQL)
-          SELECT gtrid, participants FROM #{TABLE}
-          WHERE created_at <= CAST(#{c.quote(time)} AS DATETIME(6)) - INTERVAL
-            (CASE outcome WHEN 'commit' THEN #{microseconds(commit_age)} ELSE #{microseconds(abort_age)} END) MICROSECOND
+          SELECT gtrid, participants FROM #{ TABLE }
+          WHERE created_at <= CAST(#{ c.quote(time) } AS DATETIME(6)) - INTERVAL
+            (CASE outcome WHEN 'commit' THEN #{ microseconds(commit_age) } ELSE #{ microseconds(abort_age) } END) MICROSECOND
         SQL
       end
-      rows.map { |gtrid, participants| [gtrid, JSON.parse(participants)] }
+
+      rows.map { |gtrid, participants| [ gtrid, JSON.parse(participants) ] }
     end
 
     private
       def insert(gtrid, outcome, participants)
         with_connection do |c|
           c.insert(
-            "INSERT INTO #{TABLE} (gtrid, outcome, participants, created_at) VALUES " \
-            "(#{c.quote(gtrid)}, #{c.quote(outcome.to_s)}, #{c.quote(JSON.generate(participants))}, UTC_TIMESTAMP(6))",
+            "INSERT INTO #{ TABLE } (gtrid, outcome, participants, created_at) VALUES " \
+            "(#{ c.quote(gtrid) }, #{ c.quote(outcome.to_s) }, #{ c.quote(JSON.generate(participants)) }, UTC_TIMESTAMP(6))",
             "ActiveXA"
           )
         end
@@ -119,6 +127,7 @@ module ActiveXA
 
       # Uncached, so a caller with the query cache on still reads the log as
       # it is now.
+      #
       def with_connection
         connection = @pool.checkout
         connection.uncached { yield connection }

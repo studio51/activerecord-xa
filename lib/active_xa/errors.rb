@@ -6,19 +6,24 @@ module ActiveXA
 
   # A participant connection already had an open transaction, so it can't be
   # enlisted (XA START can't join an existing local transaction).
+  #
   class TransactionAlreadyOpen < Error; end
 
   # Phase 1 failed on some database. Everything was rolled back.
+  #
   class PrepareFailed < Error; end
 
   # The commit decision couldn't be written. Everything was rolled back.
+  #
   class DecisionLogFailed < Error; end
 
   # The commit decision may or may not have reached the log, and the log
   # could not be asked. Nothing was rolled back: the branches stay prepared
   # and recovery finishes the transaction whichever way the log says.
+  #
   class OutcomeUnknown < Error; end
 
   # Something tried to use a connection in a way XA doesn't allow.
+  #
   class UnsupportedOperation < Error; end
 end

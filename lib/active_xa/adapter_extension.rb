@@ -11,6 +11,7 @@ module ActiveXA
   #   "commits" (and runs after_commit callbacks) the data is durable.
   # * ROLLBACK becomes XA END + XA ROLLBACK, unless the coordinator has
   #   already resolved the branch.
+  #
   module AdapterExtension
     attr_accessor :active_xa_branch
 
@@ -24,9 +25,10 @@ module ActiveXA
       return super unless active_xa_branch
 
       internal_execute(
-        "SET TRANSACTION ISOLATION LEVEL #{transaction_isolation_levels.fetch(isolation)}",
+        "SET TRANSACTION ISOLATION LEVEL #{ transaction_isolation_levels.fetch(isolation) }",
         "TRANSACTION", allow_retry: false, materialize_transactions: false
       )
+
       active_xa_branch.start!
     end
 
@@ -37,8 +39,10 @@ module ActiveXA
 
       # Only reachable if Rails commits without the coordinator having run,
       # which would be a bug in ActiveXA. Fail closed.
+      #
       branch.rollback!
-      raise Error, "XA branch #{branch.xid} reached COMMIT without the coordinator; rolled back"
+
+      raise Error, "XA branch #{ branch.xid } reached COMMIT without the coordinator; rolled back"
     end
 
     def exec_rollback_db_transaction
@@ -52,6 +56,7 @@ module ActiveXA
     # ROLLBACK AND CHAIN isn't valid inside XA. Rails falls back to
     # rollback + re-materialise, i.e. XA ROLLBACK then XA START again with
     # the same xid, which MySQL allows.
+    #
     def supports_restart_db_transaction?
       return false if active_xa_branch
 

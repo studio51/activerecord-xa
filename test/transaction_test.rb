@@ -9,7 +9,7 @@ class TransactionTest < ActiveXATestCase
       Order.create!(name: "order")
     end
 
-    assert_equal [1, 1], counts
+    assert_equal [ 1, 1 ], counts
     assert_empty prepared_xids(PrimaryRecord)
     assert_empty ActiveXA.decision_log.entries, "decision row should be cleared after a clean commit"
   end
@@ -28,8 +28,8 @@ class TransactionTest < ActiveXATestCase
       end
     end
 
-    assert_equal [0, 0], counts
-    assert_includes Events.log, [:order_after_rollback]
+    assert_equal [ 0, 0 ], counts
+    assert_includes Events.log, [ :order_after_rollback ]
   end
 
   def test_active_record_rollback_rolls_back_every_database_quietly
@@ -40,8 +40,8 @@ class TransactionTest < ActiveXATestCase
     end
 
     assert_nil result
-    assert_equal [0, 0], counts
-    assert_includes Events.log, [:order_after_rollback]
+    assert_equal [ 0, 0 ], counts
+    assert_includes Events.log, [ :order_after_rollback ]
     assert_empty prepared_xids(PrimaryRecord)
   end
 
@@ -51,9 +51,9 @@ class TransactionTest < ActiveXATestCase
       raise ActiveRecord::Rollback
     end
 
-    assert_equal [0, 0], counts
+    assert_equal [ 0, 0 ], counts
     ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "next"); TrackerEvent.create!(name: "next") }
-    assert_equal [1, 1], counts
+    assert_equal [ 1, 1 ], counts
   end
 
   def test_prepare_failure_rolls_back_the_database_that_already_prepared
@@ -66,7 +66,7 @@ class TransactionTest < ActiveXATestCase
       end
     end
 
-    assert_equal [0, 0], counts
+    assert_equal [ 0, 0 ], counts
     assert_empty prepared_xids(PrimaryRecord)
     assert_empty prepared_xids(TrackerRecord)
     assert_empty ActiveXA.decision_log.entries
@@ -80,7 +80,7 @@ class TransactionTest < ActiveXATestCase
 
     # With plain nested Rails transactions this would be 0: the tracker
     # commits (and fires after_commit) before the primary does.
-    assert_includes Events.log, [:order_visible_in_tracker_after_commit, 1]
+    assert_includes Events.log, [ :order_visible_in_tracker_after_commit, 1 ]
   end
 
   def test_before_commit_runs_once_and_before_prepare
@@ -89,7 +89,7 @@ class TransactionTest < ActiveXATestCase
       TrackerEvent.create!(name: "tracked")
     end
 
-    assert_equal 1, Events.log.count([:tracker_before_commit])
+    assert_equal 1, Events.log.count([ :tracker_before_commit ])
   end
 
   def test_single_database_touched_uses_one_phase_commit_and_no_log
@@ -99,17 +99,17 @@ class TransactionTest < ActiveXATestCase
       ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "solo") }
     end
 
-    assert_equal [1, 0], counts
+    assert_equal [ 1, 0 ], counts
   end
 
   def test_untouched_transaction_is_fine
     ActiveXA.transaction(PrimaryRecord, TrackerRecord) { nil }
-    assert_equal [0, 0], counts
+    assert_equal [ 0, 0 ], counts
   end
 
   def test_early_return_commits_like_rails_does
     early_return_helper
-    assert_equal [1, 1], counts
+    assert_equal [ 1, 1 ], counts
   end
 
   def test_early_return_commits_even_while_another_exception_is_being_handled
@@ -119,7 +119,7 @@ class TransactionTest < ActiveXATestCase
       early_return_helper
     end
 
-    assert_equal [1, 1], counts
+    assert_equal [ 1, 1 ], counts
   end
 
   def test_throw_commits_like_rails_does
@@ -131,7 +131,7 @@ class TransactionTest < ActiveXATestCase
       end
     end
 
-    assert_equal [1, 1], counts
+    assert_equal [ 1, 1 ], counts
   end
 
   def test_killing_the_thread_rolls_back_like_rails_does
@@ -148,7 +148,7 @@ class TransactionTest < ActiveXATestCase
     thread.kill
     thread.join
 
-    assert_equal [0, 0], counts
+    assert_equal [ 0, 0 ], counts
     assert_empty prepared_xids(PrimaryRecord)
   end
 
@@ -162,7 +162,7 @@ class TransactionTest < ActiveXATestCase
       TrackerEvent.create!(name: "tracked")
     end
 
-    assert_equal ["kept"], Order.pluck(:name)
+    assert_equal [ "kept" ], Order.pluck(:name)
     assert_equal 1, TrackerEvent.count
   end
 
@@ -178,7 +178,7 @@ class TransactionTest < ActiveXATestCase
       TrackerEvent.create!(name: "tracked")
     end
 
-    assert_equal ["kept"], Order.pluck(:name)
+    assert_equal [ "kept" ], Order.pluck(:name)
     assert_equal 1, TrackerEvent.count
   end
 
@@ -216,7 +216,7 @@ class TransactionTest < ActiveXATestCase
       next if killed || !payload[:sql].start_with?("XA START") || payload[:connection].pool != PrimaryRecord.connection_pool
 
       killed = true
-      killer.execute("KILL #{lost}")
+      killer.execute("KILL #{ lost }")
       sleep 0.2 # let the server finish tearing the session and its branch down
     end
 
@@ -229,8 +229,8 @@ class TransactionTest < ActiveXATestCase
 
     assert killed, "the connection was never killed"
     refute_equal lost, PrimaryRecord.connection.select_value("SELECT CONNECTION_ID()")
-    assert_equal ["existing"], names
-    assert_equal [2, 1], counts
+    assert_equal [ "existing" ], names
+    assert_equal [ 2, 1 ], counts
   ensure
     ActiveSupport::Notifications.unsubscribe(subscription) if subscription
     PrimaryRecord.connection_pool.checkin(killer) if killer
@@ -249,7 +249,7 @@ class TransactionTest < ActiveXATestCase
     end
 
     assert_equal 1, newly_visible, "under READ COMMITTED the branch sees what another session commits"
-    assert_equal [2, 1], counts
+    assert_equal [ 2, 1 ], counts
   ensure
     ActiveRecord.default_transaction_isolation_level = nil
   end
@@ -282,7 +282,7 @@ class TransactionTest < ActiveXATestCase
     ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; TrackerEvent.create! }
     Order.transaction { Order.create! }
     TrackerEvent.create!
-    assert_equal [2, 2], counts
+    assert_equal [ 2, 2 ], counts
   end
 
   def test_connections_go_back_to_the_pool_afterwards
@@ -309,7 +309,7 @@ class TransactionTest < ActiveXATestCase
     kept = in_new_thread do
       held = PrimaryRecord.lease_connection
       ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; TrackerEvent.create! }
-      leased_connections == [held]
+      leased_connections == [ held ]
     ensure
       PrimaryRecord.connection_pool.release_connection
     end

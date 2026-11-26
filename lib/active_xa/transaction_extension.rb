@@ -12,6 +12,7 @@ module ActiveXA
   # transaction has closed. Until then some connections are still enlisted,
   # with Rails believing a transaction is open that MySQL has already
   # finished, and a callback that wrote through one of them would misbehave.
+  #
   module TransactionExtension
     def before_commit_records
       super unless @active_xa_runs_before_commit
@@ -33,12 +34,15 @@ module ActiveXA
     # global transaction ended, whatever Rails made of its own block. With
     # nil it runs neither: Rails does the same when it cannot tell whether a
     # COMMIT went through.
+    #
     def active_xa_release_callbacks!(action)
       @active_xa_holds_callbacks = false
+
       public_send(action) if action
     end
 
     # Has anything been enrolled since the last pass?
+    #
     def active_xa_before_commit_pending?
       records.to_a.size > @active_xa_records_done.to_i || @callbacks.to_a.size > @active_xa_callbacks_done.to_i
     end
@@ -47,6 +51,7 @@ module ActiveXA
     # pass. Yields once those have run, then counts everything enrolled here
     # in the meantime as done. Rails likewise gives no before_commit to
     # records that a transaction's own callbacks add to it.
+    #
     def active_xa_run_before_commit!
       @active_xa_runs_before_commit = true
       fresh_records = records.to_a.drop(@active_xa_records_done.to_i)
@@ -64,6 +69,7 @@ module ActiveXA
 
     private
       # Picks instances the way Transaction#before_commit_records does.
+      #
       def active_xa_before_commit(records)
         if ActiveRecord.before_committed_on_all_records
           last_copy = records.each_with_object({}) { |record, copies| copies[record] = record }

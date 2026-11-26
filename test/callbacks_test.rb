@@ -37,7 +37,7 @@ class CallbacksTest < ActiveXATestCase
       })
     end
 
-    assert_equal [:event, :order, :order_from_event], Events.log.grep(Symbol).sort
+    assert_equal [ :event, :order, :order_from_event ], Events.log.grep(Symbol).sort
   end
 
   def test_before_commit_callbacks_that_keep_enrolling_each_other_terminate
@@ -50,7 +50,7 @@ class CallbacksTest < ActiveXATestCase
 
     # As with nested Rails transactions: the record the event adds while the
     # primary is still running its callbacks gets no before_commit of its own.
-    assert_equal [2, 1], counts
+    assert_equal [ 2, 1 ], counts
   end
 
   def test_before_commit_callbacks_registered_on_the_transaction_run_once
@@ -71,7 +71,7 @@ class CallbacksTest < ActiveXATestCase
       HookedEvent.create!(name: "tracked", on_after_commit: -> { TrackerEvent.create!(name: "from after_commit") })
     end
 
-    assert_equal ["tracked", "from after_commit"], TrackerEvent.order(:id).pluck(:name)
+    assert_equal [ "tracked", "from after_commit" ], TrackerEvent.order(:id).pluck(:name)
     assert_empty prepared_xids(TrackerRecord)
   end
 
@@ -95,7 +95,7 @@ class CallbacksTest < ActiveXATestCase
       })
     end
 
-    assert_equal [2, 2], counts
+    assert_equal [ 2, 2 ], counts
   end
 
   def test_after_all_transactions_commit_runs_once_and_can_write
@@ -103,12 +103,12 @@ class CallbacksTest < ActiveXATestCase
       Order.create!(name: "order")
       TrackerEvent.create!(name: "tracked")
       ActiveRecord.after_all_transactions_commit do
-        Events.log << [:all_committed, counts]
+        Events.log << [ :all_committed, counts ]
         Order.create!(name: "afterwards")
       end
     end
 
-    assert_equal [[:all_committed, [1, 1]]], Events.log.select { |e| e.first == :all_committed }
+    assert_equal [ [ :all_committed, [ 1, 1 ] ] ], Events.log.select { |e| e.first == :all_committed }
     assert_equal 2, Order.count
   end
 
@@ -122,10 +122,10 @@ class CallbacksTest < ActiveXATestCase
     end
 
     assert_equal "after_commit failed", error.message
-    assert_equal [1, 1], counts
+    assert_equal [ 1, 1 ], counts
     assert_predicate order, :persisted?, "the order is committed, so it must not be reset to a new record"
-    assert_includes Events.log, [:order_after_commit, order.id]
-    refute_includes Events.log, [:order_after_rollback]
+    assert_includes Events.log, [ :order_after_commit, order.id ]
+    refute_includes Events.log, [ :order_after_rollback ]
   end
 
   def test_after_rollback_can_write_and_the_original_error_survives
@@ -139,7 +139,7 @@ class CallbacksTest < ActiveXATestCase
 
     assert_equal "boom", error.message
     assert_equal 0, Order.count
-    assert_equal ["from after_rollback"], TrackerEvent.pluck(:name)
+    assert_equal [ "from after_rollback" ], TrackerEvent.pluck(:name)
   end
 
   def test_active_record_rollback_from_a_before_commit_callback_rolls_back_quietly
@@ -148,7 +148,7 @@ class CallbacksTest < ActiveXATestCase
       TrackerEvent.create!(name: "tracked")
     end
 
-    assert_equal [0, 0], counts
+    assert_equal [ 0, 0 ], counts
     assert_empty prepared_xids(PrimaryRecord)
   end
 
@@ -160,7 +160,7 @@ class CallbacksTest < ActiveXATestCase
       end
     end
 
-    assert_equal [0, 0], counts
+    assert_equal [ 0, 0 ], counts
     assert_empty prepared_xids(PrimaryRecord)
   end
 end
