@@ -19,10 +19,14 @@ base = {
   password: ENV.fetch("MYSQL_PASSWORD", "xa"),
   pool: 5,
 }
+# A second pool on the tracker database whose name is 36 characters but 108
+# bytes, to check that XIDs respect MySQL's byte limits.
+WIDE_NAME = "数据库" * 12
 ActiveRecord::Base.configurations = {
   "test" => {
     "primary" => base.merge(database: "xa_primary"),
     "tracker" => base.merge(database: "xa_tracker"),
+    WIDE_NAME => base.merge(database: "xa_tracker"),
   },
 }
 ActiveRecord::Base.logger = Logger.new(ENV["SQL_LOG"] ? $stdout : nil)
@@ -35,6 +39,11 @@ end
 class TrackerRecord < ActiveRecord::Base
   self.abstract_class = true
   connects_to database: { writing: :tracker }
+end
+
+class WideNameRecord < ActiveRecord::Base
+  self.abstract_class = true
+  connects_to database: { writing: WIDE_NAME.to_sym }
 end
 
 module Events
@@ -64,6 +73,10 @@ class TrackerEvent < TrackerRecord
       end
     end
   end
+end
+
+class WideNameEvent < WideNameRecord
+  self.table_name = "tracker_events"
 end
 
 PrimaryRecord.connection.execute("DROP TABLE IF EXISTS orders")

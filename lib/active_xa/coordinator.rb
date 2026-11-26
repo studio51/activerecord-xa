@@ -51,7 +51,7 @@ module ActiveXA
                   "#{pool.db_config.name} already has an open transaction; ActiveXA must open the outermost one"
           end
 
-          enlist(connection, Xid.new(@gtrid, bqual_for(pool, index))) do
+          enlist(connection, Xid.new(@gtrid, Xid.bqual(index, pool.db_config.name))) do
             nest(remaining.drop(1), &block)
           end
         end
@@ -159,10 +159,6 @@ module ActiveXA
         details = failures.map { |b, e| "#{b.xid}: #{e.class}: #{e.message}" }.join("; ")
         @config.logger&.error("ActiveXA: #{@gtrid} committed but not yet applied everywhere: #{details}")
         @config.on_incomplete_commit&.call(@gtrid, failures)
-      end
-
-      def bqual_for(pool, index)
-        "#{index}-#{pool.db_config.name}"[0, 64]
       end
 
       def discard_connection(connection)

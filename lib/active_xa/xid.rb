@@ -10,11 +10,19 @@ module ActiveXA
   class Xid
     FORMAT_ID = 0x41584131 # "AXA1"
     PREFIX = "axa"
+    MAX_PART_BYTES = 64 # MySQL's limit for gtrid and for bqual, in bytes
 
     attr_reader :gtrid, :bqual
 
     def self.generate_gtrid
       "#{PREFIX}-#{(Time.now.to_f * 1000).to_i}-#{SecureRandom.hex(12)}"
+    end
+
+    # The index keeps the qualifier unique within its gtrid; the database
+    # name is there for whoever reads XA RECOVER. A long multi-byte name is
+    # cut on a byte boundary, so a split trailing character is dropped.
+    def self.bqual(index, name)
+      "#{index}-#{name}".byteslice(0, MAX_PART_BYTES).scrub("")
     end
 
     def self.created_at(gtrid)

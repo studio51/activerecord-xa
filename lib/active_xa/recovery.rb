@@ -81,8 +81,9 @@ module ActiveXA
         connection.select_rows("XA RECOVER").filter_map do |format_id, gtrid_length, bqual_length, data|
           next unless Integer(format_id) == Xid::FORMAT_ID
 
+          # The lengths count bytes, and data is not always single-byte.
           gl = Integer(gtrid_length)
-          Xid.new(data[0, gl], data[gl, Integer(bqual_length)])
+          Xid.new(data.byteslice(0, gl), data.byteslice(gl, Integer(bqual_length)))
         end
       end
 

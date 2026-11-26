@@ -61,6 +61,15 @@ class RecoveryTest < ActiveXATestCase
     assert_empty ActiveXA.decision_log.entries
   end
 
+  def test_recovery_resolves_branches_with_multibyte_qualifiers
+    gtrid = simulate_crash(log_decision: true, bqual_name: WIDE_NAME)
+
+    report = recover(grace: 0)
+    assert_empty report.errors
+    assert_equal [gtrid, gtrid], report.committed.map(&:gtrid)
+    assert_equal [1, 1], counts
+  end
+
   private
     def recover(grace:)
       ActiveXA::Recovery.new([PrimaryRecord, TrackerRecord], log: ActiveXA.decision_log, grace: grace).run
@@ -68,11 +77,11 @@ class RecoveryTest < ActiveXATestCase
 
     # Prepare a branch on each database through raw connections, optionally
     # log the decision, then drop the connections as a dying process would.
-    def simulate_crash(log_decision:)
+    def simulate_crash(log_decision:, bqual_name: "crash")
       gtrid = ActiveXA::Xid.generate_gtrid
       branches = [[PrimaryRecord, "orders"], [TrackerRecord, "tracker_events"]].map.with_index do |(klass, table), i|
         conn = klass.connection_pool.checkout
-        xid = ActiveXA::Xid.new(gtrid, "#{i}-crash")
+        xid = ActiveXA::Xid.new(gtrid, ActiveXA::Xid.bqual(i, bqual_name))
         conn.execute("XA START #{xid.to_sql(conn)}")
         conn.execute("INSERT INTO #{table} (name) VALUES ('crashed')")
         conn.execute("XA END #{xid.to_sql(conn)}")
