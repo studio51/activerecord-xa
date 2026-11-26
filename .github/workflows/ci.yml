@@ -58,7 +58,6 @@ jobs:
     env:
       MYSQL_HOST: 127.0.0.1
       MYSQL_USER: root
-      BUNDLE_GEMFILE: example/Gemfile
     defaults:
       run:
         working-directory: example
@@ -68,5 +67,6 @@ jobs:
         with:
           ruby-version: "4.0.10"
           bundler-cache: true
+          working-directory: example
       - run: bin/rails db:prepare
       - run: bin/rails runner script/smoke.rb
