@@ -102,6 +102,46 @@ class TransactionTest < ActiveXATestCase
     assert_equal 1, TrackerEvent.count
   end
 
+  def test_nested_requires_new_rollback_before_the_first_write
+    # Rails restarts the outer transaction instead of using a savepoint
+    # here: XA ROLLBACK, then XA START again under the same XID.
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      Order.transaction(requires_new: true) do
+        Order.create!(name: "discarded")
+        raise ActiveRecord::Rollback
+      end
+      Order.create!(name: "kept")
+      TrackerEvent.create!(name: "tracked")
+    end
+
+    assert_equal ["kept"], Order.pluck(:name)
+    assert_equal 1, TrackerEvent.count
+  end
+
+  def test_nested_non_joinable_transaction_uses_a_savepoint
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      Order.create!(name: "outer")
+      Order.transaction(joinable: false) { Order.create!(name: "inner") }
+      TrackerEvent.create!(name: "tracked")
+    end
+
+    assert_equal %w[outer inner], Order.order(:id).pluck(:name)
+    assert_equal 1, TrackerEvent.count
+  end
+
+  def test_a_branch_cannot_be_started_twice
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      Order.create!(name: "order")
+      TrackerEvent.create!(name: "tracked")
+      branch = PrimaryRecord.lease_connection.active_xa_branch
+
+      error = assert_raises(ActiveXA::UnsupportedOperation) { branch.start! }
+      assert_match(/is active and cannot be started again/, error.message)
+    end
+
+    assert_equal [1, 1], counts
+  end
+
   def test_refuses_to_join_an_already_open_transaction
     assert_raises(ActiveXA::TransactionAlreadyOpen) do
       Order.transaction do

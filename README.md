@@ -40,16 +40,17 @@ ActiveXA.recover!(PrimaryRecord, TrackerRecord)
 
 1. A normal Rails transaction is opened on each database, but the adapter issues `XA START` instead of `BEGIN`, lazily, when the database is first queried.
 2. Your block runs.
-3. While all the Rails transactions are still open, ActiveXA runs `before_commit` callbacks, then `XA END` and `XA PREPARE` on every database. Each database has now promised it can commit.
+3. While all the Rails transactions are still open, ActiveXA runs `before_commit` callbacks, including those of records that another database's callbacks save, then `XA END` and `XA PREPARE` on every database. Each database has now promised it can commit.
 4. A commit decision is written to the decision log on a separate connection. This is the point of no return.
 5. `XA COMMIT` runs on every database, then the decision row is deleted.
-6. The Rails blocks exit. Their `COMMIT` is a no-op, so `after_commit` callbacks fire only once the data is durable on every database.
+6. The Rails blocks exit. Their `COMMIT` is a no-op.
+7. `after_commit` callbacks run, once the data is durable on every database and every connection is an ordinary one again. They can write to any of the databases, or start another ActiveXA transaction.
 
 If only one database was touched, ActiveXA uses `XA COMMIT ... ONE PHASE` and skips the log.
 
 ## What it guarantees
 
-Before the decision is logged, any failure rolls back every database and raises (`PrepareFailed`, `DecisionLogFailed`, or your block's own exception). `after_rollback` callbacks fire as normal.
+Before the decision is logged, any failure rolls back every database and raises (`PrepareFailed`, `DecisionLogFailed`, or your block's own exception). `after_rollback` callbacks fire once every database has rolled back.
 
 After the decision is logged, the transaction is committed, even if a database fails to apply `XA COMMIT`. ActiveXA does not raise in that case, because a caller retrying would duplicate work. The failed branch stays `PREPARED`, the connection holding it is discarded, `on_incomplete_commit` is called, and `ActiveXA.recover!` commits it.
 

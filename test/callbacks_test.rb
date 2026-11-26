@@ -65,6 +65,83 @@ class CallbacksTest < ActiveXATestCase
     assert_equal 1, Events.log.count(:transaction_before_commit)
   end
 
+  def test_after_commit_can_write_to_its_own_database
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      Order.create!(name: "order")
+      HookedEvent.create!(name: "tracked", on_after_commit: -> { TrackerEvent.create!(name: "from after_commit") })
+    end
+
+    assert_equal ["tracked", "from after_commit"], TrackerEvent.order(:id).pluck(:name)
+    assert_empty prepared_xids(TrackerRecord)
+  end
+
+  def test_after_commit_gets_real_transactions_on_the_other_database
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      Order.create!(name: "order")
+      HookedEvent.create!(on_after_commit: -> {
+        Order.transaction(requires_new: true) { Order.create!(name: "kept") }
+        Order.transaction { Order.create!(name: "undone"); raise ActiveRecord::Rollback }
+      })
+    end
+
+    assert_equal %w[order kept], Order.order(:id).pluck(:name)
+  end
+
+  def test_after_commit_can_start_another_xa_transaction
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      Order.create!(name: "first")
+      HookedEvent.create!(name: "first", on_after_commit: -> {
+        ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "second"); TrackerEvent.create!(name: "second") }
+      })
+    end
+
+    assert_equal [2, 2], counts
+  end
+
+  def test_after_all_transactions_commit_runs_once_and_can_write
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      Order.create!(name: "order")
+      TrackerEvent.create!(name: "tracked")
+      ActiveRecord.after_all_transactions_commit do
+        Events.log << [:all_committed, counts]
+        Order.create!(name: "afterwards")
+      end
+    end
+
+    assert_equal [[:all_committed, [1, 1]]], Events.log.select { |e| e.first == :all_committed }
+    assert_equal 2, Order.count
+  end
+
+  def test_a_failing_after_commit_does_not_make_the_other_database_look_rolled_back
+    order = nil
+    error = assert_raises(RuntimeError) do
+      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+        order = Order.create!(name: "order")
+        HookedEvent.create!(on_after_commit: -> { raise "after_commit failed" })
+      end
+    end
+
+    assert_equal "after_commit failed", error.message
+    assert_equal [1, 1], counts
+    assert_predicate order, :persisted?, "the order is committed, so it must not be reset to a new record"
+    assert_includes Events.log, [:order_after_commit, order.id]
+    refute_includes Events.log, [:order_after_rollback]
+  end
+
+  def test_after_rollback_can_write_and_the_original_error_survives
+    error = assert_raises(RuntimeError) do
+      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+        Order.create!(name: "order")
+        HookedEvent.create!(on_after_rollback: -> { TrackerEvent.create!(name: "from after_rollback") })
+        raise "boom"
+      end
+    end
+
+    assert_equal "boom", error.message
+    assert_equal 0, Order.count
+    assert_equal ["from after_rollback"], TrackerEvent.pluck(:name)
+  end
+
   def test_before_commit_failure_rolls_everything_back
     assert_raises(RuntimeError) do
       ActiveXA.transaction(PrimaryRecord, TrackerRecord) do

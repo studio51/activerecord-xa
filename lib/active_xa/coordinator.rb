@@ -9,8 +9,9 @@ module ActiveXA
   # 3. Inside the innermost Rails transaction, before any of them exits:
   #    runs before_commit callbacks, XA PREPAREs every branch, logs the
   #    commit decision, then XA COMMITs every branch.
-  # 4. Lets the Rails blocks exit. Their COMMITs are no-ops, so after_commit
-  #    callbacks fire only once the data is durable everywhere.
+  # 4. Lets the Rails blocks exit. Their COMMITs are no-ops.
+  # 5. Runs after_commit callbacks, once the data is durable everywhere and
+  #    every connection is an ordinary one again.
   #
   # Any failure before the decision is logged rolls back every branch.
   # Failures after it leave branches :in_doubt for recovery to commit.
@@ -34,6 +35,8 @@ module ActiveXA
       result = nil
       nest(@pools.each_with_index.to_a) { result = run_block(&block) }
       result
+    ensure
+      release_callbacks
     end
 
     private
@@ -64,6 +67,7 @@ module ActiveXA
 
         connection.transaction do
           branch.ar_transaction = connection.current_transaction
+          branch.ar_transaction.active_xa_hold_callbacks!
           yield
         end
       ensure
@@ -120,6 +124,22 @@ module ActiveXA
             before_commit_pass(other, finished, in_progress + [other])
           end
         end
+      end
+
+      # after_commit and after_rollback callbacks, innermost transaction
+      # first as Rails would. By now every participant's transaction has
+      # closed, so a callback can use any of the databases, or start another
+      # ActiveXA transaction, as it could after a plain one. One database's
+      # callbacks failing does not cost the others theirs; the first error
+      # is raised once all have run.
+      def release_callbacks
+        error = nil
+        @branches.reverse_each do |branch|
+          branch.ar_transaction&.active_xa_release_callbacks!
+        rescue => e
+          error ||= e
+        end
+        raise error if error
       end
 
       def commit_one_phase(branch)

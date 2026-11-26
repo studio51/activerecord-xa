@@ -1,13 +1,43 @@
 # frozen_string_literal: true
 
 module ActiveXA
-  # before_commit callbacks must run while every branch is still open, since
-  # they may write. Rails would run them only when each block exits, after
-  # the coordinator has already committed. The coordinator runs them early,
-  # in passes, and this stops Rails running them a second time.
+  # Lets the coordinator decide when a participant's transactional callbacks
+  # run, instead of Rails running them as each transaction block exits.
+  #
+  # before_commit must run while every branch is still open, since the
+  # callbacks may write. The coordinator runs it early, in passes, and Rails
+  # is stopped from running it a second time.
+  #
+  # after_commit and after_rollback must wait until every participant's
+  # transaction has closed. Until then some connections are still enlisted,
+  # with Rails believing a transaction is open that MySQL has already
+  # finished, and a callback that wrote through one of them would misbehave.
   module TransactionExtension
     def before_commit_records
       super unless @active_xa_runs_before_commit
+    end
+
+    def commit_records
+      return super unless @active_xa_holds_callbacks
+
+      @active_xa_held = :commit_records
+    end
+
+    def rollback_records
+      return super unless @active_xa_holds_callbacks
+
+      @active_xa_held = :rollback_records
+    end
+
+    def active_xa_hold_callbacks!
+      @active_xa_holds_callbacks = true
+    end
+
+    # Runs whichever of commit_records / rollback_records Rails asked for.
+    def active_xa_release_callbacks!
+      @active_xa_holds_callbacks = false
+      held, @active_xa_held = @active_xa_held, nil
+      public_send(held) if held
     end
 
     # Has anything been enrolled since the last pass?

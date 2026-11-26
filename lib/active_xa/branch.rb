@@ -26,7 +26,15 @@ module ActiveXA
       %i[committed rolled_back in_doubt].include?(@state)
     end
 
+    # Rails begins the transaction lazily, and begins it again after rolling
+    # back a requires_new block that came before the first write. Nothing
+    # else may start a branch: MySQL would refuse, or worse, open a second
+    # transaction under an XID that has already been resolved.
     def start!
+      unless @state.nil? || @state == :rolled_back
+        raise UnsupportedOperation, "XA branch #{xid} is #{@state} and cannot be started again"
+      end
+
       execute("XA START #{xid.to_sql(connection)}")
       @state = :active
     end
