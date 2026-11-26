@@ -121,6 +121,51 @@ class TransactionTest < ActiveXATestCase
     assert_equal [2, 2], counts
   end
 
+  def test_connections_go_back_to_the_pool_afterwards
+    leased = in_new_thread do
+      ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; TrackerEvent.create! }
+      leased_connections
+    end
+
+    assert_empty leased
+  end
+
+  def test_connections_go_back_to_the_pool_after_a_rollback
+    leased = in_new_thread do
+      assert_raises(RuntimeError) do
+        ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; raise "boom" }
+      end
+      leased_connections
+    end
+
+    assert_empty leased
+  end
+
+  def test_a_connection_the_caller_already_holds_stays_with_the_caller
+    kept = in_new_thread do
+      held = PrimaryRecord.lease_connection
+      ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!; TrackerEvent.create! }
+      leased_connections == [held]
+    ensure
+      PrimaryRecord.connection_pool.release_connection
+    end
+
+    assert kept, "only the connection leased before the transaction should still be leased"
+  end
+
+  def test_refusing_an_open_transaction_releases_the_connections_already_taken
+    leased = in_new_thread do
+      TrackerRecord.transaction do
+        assert_raises(ActiveXA::TransactionAlreadyOpen) do
+          ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create! }
+        end
+      end
+      leased_connections
+    end
+
+    assert_empty leased
+  end
+
   private
     def early_return_helper
       ActiveXA.transaction(PrimaryRecord, TrackerRecord) do

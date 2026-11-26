@@ -119,6 +119,16 @@ class ActiveXATestCase < Minitest::Test
     klass.connection.select_rows("XA RECOVER").select { |r| r[0].to_i == ActiveXA::Xid::FORMAT_ID }
   end
 
+  # Runs the block in a thread that holds no connections yet, like a fresh
+  # request or job, and returns its value.
+  def in_new_thread(&block)
+    Thread.new(&block).tap { |t| t.report_on_exception = false }.value
+  end
+
+  def leased_connections
+    [PrimaryRecord, TrackerRecord].filter_map { |klass| klass.connection_pool.active_connection? }
+  end
+
   private
     def rollback_stray_xa
       [PrimaryRecord, TrackerRecord].each do |klass|

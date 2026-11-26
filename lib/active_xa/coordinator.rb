@@ -34,30 +34,42 @@ module ActiveXA
       result = nil
       nest(@pools.each_with_index.to_a) { result = run_block(&block) }
       result
-    ensure
-      @branches.each { |b| b.connection.active_xa_branch = nil }
-      @discard.each { |c| discard_connection(c) }
     end
 
     private
+      # Opens the participants' transactions one inside the other. Each
+      # connection is borrowed only while its transaction is open:
+      # with_connection reuses one the caller already holds, and otherwise
+      # hands it back to the pool afterwards, as Model.transaction does.
       def nest(remaining, &block)
         return block.call if remaining.empty?
 
         pool, index = remaining.first
-        connection = pool.lease_connection
-        if connection.transaction_open?
-          raise TransactionAlreadyOpen,
-                "#{pool.db_config.name} already has an open transaction; ActiveXA must open the outermost one"
-        end
+        pool.with_connection do |connection|
+          if connection.transaction_open?
+            raise TransactionAlreadyOpen,
+                  "#{pool.db_config.name} already has an open transaction; ActiveXA must open the outermost one"
+          end
 
-        branch = Branch.new(connection, Xid.new(@gtrid, bqual_for(pool, index)))
-        connection.active_xa_branch = branch
+          enlist(connection, Xid.new(@gtrid, bqual_for(pool, index))) do
+            nest(remaining.drop(1), &block)
+          end
+        end
+      end
+
+      def enlist(connection, xid)
+        branch = Branch.new(connection, xid)
         @branches << branch
+        connection.active_xa_branch = branch
 
         connection.transaction do
           branch.ar_transaction = connection.current_transaction
-          nest(remaining.drop(1), &block)
+          yield
         end
+      ensure
+        # Before the connection can reach anyone else through the pool.
+        connection.active_xa_branch = nil
+        discard_connection(connection) if @discard.include?(connection)
       end
 
       # Rails commits when a transaction block exits early via return, break
