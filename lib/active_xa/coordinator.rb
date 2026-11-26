@@ -85,13 +85,40 @@ module ActiveXA
       end
 
       def finish!
-        @branches.each { |b| b.ar_transaction.active_xa_run_before_commit! }
+        run_before_commit_callbacks
 
         active = @branches.select(&:started?)
         case active.size
         when 0 then nil
         when 1 then commit_one_phase(active.first)
         else two_phase_commit(active)
+        end
+      end
+
+      # before_commit callbacks run while every branch is still open, because
+      # they may write (deferred touches do), possibly to another database.
+      # The order is the one nested Rails transactions give: innermost first.
+      #
+      # A callback can enrol records in a branch that has already had its
+      # turn. Rails would treat that as a new transaction with a before_commit
+      # of its own, so the branch gets another pass. A branch still in the
+      # middle of a pass does not, which is what Rails does too and is what
+      # keeps this finite.
+      def run_before_commit_callbacks
+        finished = []
+        @branches.reverse_each do |branch|
+          before_commit_pass(branch, finished, [branch])
+          finished << branch
+        end
+      end
+
+      def before_commit_pass(branch, finished, in_progress)
+        branch.ar_transaction.active_xa_run_before_commit! do
+          (finished - in_progress).each do |other|
+            next unless other.ar_transaction.active_xa_before_commit_pending?
+
+            before_commit_pass(other, finished, in_progress + [other])
+          end
         end
       end
 

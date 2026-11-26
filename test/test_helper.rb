@@ -79,6 +79,26 @@ class WideNameEvent < WideNameRecord
   self.table_name = "tracker_events"
 end
 
+# Records whose transactional callbacks run whatever a test hands them.
+module Hooked
+  def self.included(model)
+    model.attr_accessor :on_before_commit, :on_after_commit, :on_after_rollback
+    model.before_commit { on_before_commit&.call }
+    model.after_commit { on_after_commit&.call }
+    model.after_rollback { on_after_rollback&.call }
+  end
+end
+
+class HookedOrder < PrimaryRecord
+  self.table_name = "orders"
+  include Hooked
+end
+
+class HookedEvent < TrackerRecord
+  self.table_name = "tracker_events"
+  include Hooked
+end
+
 # A prepared branch outlives the process that made it and keeps its metadata
 # locks, so one left behind by an earlier run would block the DROP TABLE
 # below forever. Clear them here, and again before every test.
