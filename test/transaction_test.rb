@@ -193,17 +193,47 @@ class TransactionTest < ActiveXATestCase
     assert_equal 1, TrackerEvent.count
   end
 
-  def test_a_branch_cannot_be_started_twice
+  def test_a_finished_branch_cannot_be_reopened
+    branch = nil
     ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "order")
       TrackerEvent.create!(name: "tracked")
       branch = PrimaryRecord.lease_connection.active_xa_branch
-
-      error = assert_raises(ActiveXA::UnsupportedOperation) { branch.start! }
-      assert_match(/is active and cannot be started again/, error.message)
     end
 
-    assert_equal [1, 1], counts
+    error = assert_raises(ActiveXA::UnsupportedOperation) { branch.start! }
+    assert_match(/is committed and cannot be started again/, error.message)
+  end
+
+  def test_a_connection_lost_before_the_first_write_is_replaced_transparently
+    Order.create!(name: "existing")
+    lost = PrimaryRecord.connection.select_value("SELECT CONNECTION_ID()")
+    killer = PrimaryRecord.connection_pool.checkout
+    killed = false
+    # Rails reconnects and begins the transaction again when a read fails on
+    # a connection that has not written yet. Kill it right after XA START.
+    subscription = ActiveSupport::Notifications.subscribe("sql.active_record") do |*, payload|
+      next if killed || !payload[:sql].start_with?("XA START") || payload[:connection].pool != PrimaryRecord.connection_pool
+
+      killed = true
+      killer.execute("KILL #{lost}")
+      sleep 0.2 # let the server finish tearing the session and its branch down
+    end
+
+    names = nil
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      names = Order.where(name: "existing").map(&:name)
+      Order.create!(name: "after reconnect")
+      TrackerEvent.create!(name: "tracked")
+    end
+
+    assert killed, "the connection was never killed"
+    refute_equal lost, PrimaryRecord.connection.select_value("SELECT CONNECTION_ID()")
+    assert_equal ["existing"], names
+    assert_equal [2, 1], counts
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+    PrimaryRecord.connection_pool.checkin(killer) if killer
   end
 
   def test_refuses_to_join_an_already_open_transaction

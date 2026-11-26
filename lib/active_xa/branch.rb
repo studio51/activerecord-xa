@@ -32,12 +32,15 @@ module ActiveXA
       @state == :in_doubt
     end
 
-    # Rails begins the transaction lazily, and begins it again after rolling
-    # back a requires_new block that came before the first write. Nothing
-    # else may start a branch: MySQL would refuse, or worse, open a second
-    # transaction under an XID that has already been resolved.
+    # Rails begins the transaction lazily. It begins it again after rolling
+    # back a requires_new block that came before the first write, and again
+    # on a fresh session when the connection drops before the first write
+    # (the server has discarded the old session's branch by then). All of
+    # that happens while the block runs. Once the coordinator has begun
+    # ending the branch, starting it would reopen an XID that is prepared or
+    # already resolved.
     def start!
-      unless @state.nil? || @state == :rolled_back
+      if %i[idle prepared committed in_doubt].include?(@state)
         raise UnsupportedOperation, "XA branch #{xid} is #{@state} and cannot be started again"
       end
 
