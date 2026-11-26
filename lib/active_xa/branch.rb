@@ -62,7 +62,7 @@ module ActiveXA
     def rollback!
       case @state
       when :active
-        execute("XA END #{xid.to_sql(connection)}")
+        end_before_rollback
         execute("XA ROLLBACK #{xid.to_sql(connection)}")
       when :idle, :prepared
         execute("XA ROLLBACK #{xid.to_sql(connection)}")
@@ -77,6 +77,16 @@ module ActiveXA
     end
 
     private
+      # When a statement in the block was the victim of a deadlock, MySQL has
+      # already undone the branch and marked it rollback-only. XA END then
+      # fails with XA_RBDEADLOCK, but XA ROLLBACK is still needed to close
+      # the branch, and it is the result of that one that counts.
+      def end_before_rollback
+        execute("XA END #{xid.to_sql(connection)}")
+      rescue ActiveRecord::StatementInvalid
+        nil
+      end
+
       def execute(sql)
         connection.send(:internal_execute, sql, "TRANSACTION",
                         allow_retry: false, materialize_transactions: false)
