@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Installs dependencies and creates the two test databases and the xa user.
+# MYSQL_ROOT_USER / MYSQL_ROOT_PASSWORD (defaults: root, empty) must be able to
+# create databases and users on the server at MYSQL_HOST (default localhost).
+set -euo pipefail
+IFS=$'\n\t'
+
+bundle install
+
+mysql_root=(mysql -h "${MYSQL_HOST:-localhost}" -u "${MYSQL_ROOT_USER:-root}")
+[ -n "${MYSQL_ROOT_PASSWORD:-}" ] && mysql_root+=("-p${MYSQL_ROOT_PASSWORD}")
+[ -n "${MYSQL_TCP_PORT:-}" ] && mysql_root+=(-P "${MYSQL_TCP_PORT}")
+
+"${mysql_root[@]}" <<SQL
+CREATE DATABASE IF NOT EXISTS xa_primary;
+CREATE DATABASE IF NOT EXISTS xa_tracker;
+CREATE USER IF NOT EXISTS 'xa'@'%' IDENTIFIED BY 'xa';
+GRANT ALL ON xa_primary.* TO 'xa'@'%';
+GRANT ALL ON xa_tracker.* TO 'xa'@'%';
+GRANT XA_RECOVER_ADMIN ON *.* TO 'xa'@'%';
+SQL
+
+echo "Ready: bundle exec rake"
