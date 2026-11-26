@@ -1,109 +1,262 @@
 # ActiveXA
 
-Atomic transactions across multiple MySQL databases in Rails, using MySQL's XA two-phase commit, with a durable decision log and crash recovery.
+> Atomic transactions across multiple MySQL databases for Active Record.
 
-Nested `transaction` blocks on different databases look atomic, but they're two independent transactions. The inner one commits when its block exits, so a failure afterwards leaves it committed and the outer one rolled back. ActiveXA makes them commit together or not at all.
+[![CI](https://github.com/studio51/activerecord-xa/actions/workflows/ci.yml/badge.svg)](https://github.com/studio51/activerecord-xa/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+Nested `transaction` blocks on different databases look atomic, but they are two independent transactions:
+
+```ruby
+PrimaryRecord.transaction do
+  TrackerRecord.transaction do
+    TrackerEvent.create!(name: "order placed")
+  end                                    # the tracker commits here
+  Order.create!(total: 0)                # raises: the order rolls back,
+end                                      # the tracker event stays
+```
+
+ActiveXA runs them as one transaction using MySQL's XA two-phase commit, so every database commits or none does:
 
 ```ruby
 ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
-  persist_tracker_data!
-  persist_application_data!
+  TrackerEvent.create!(name: "order placed")
+  Order.create!(total: 0)                # raises: both roll back
 end
 ```
 
-Inside the block you use models exactly as normal. Only databases the block actually touches join the transaction.
+Inside the block you use models exactly as normal.
 
-## Setup
+## Why use it
+
+- **All or nothing across databases.** A failure anywhere, at any point before the commit decision, rolls back every database.
+- **Survives crashes.** The decision is written to a durable log before anything commits. If the process dies halfway, `ActiveXA.recover!` finishes the job, the same way on every database.
+- **Plain Rails inside.** Validations, callbacks, `requires_new` savepoints, `ActiveRecord::Rollback`, isolation levels and early `return` all behave as they do in a normal transaction.
+- **`after_commit` you can trust.** Callbacks run once the data is durable on every database, so a job enqueued from `after_commit` never sees half a transaction.
+- **Pay only for what you touch.** A database the block never queries never joins. If only one is touched, the commit is a single `XA COMMIT ... ONE PHASE` with no log write.
+- **Small, with nothing to run.** About 650 lines of code on top of Active Record; no coordinator service, no queue, no extra infrastructure.
+
+## Installation
 
 ```ruby
-# config/initializers/active_xa.rb
-ActiveXA.configure do |c|
-  c.decision_log_class = PrimaryRecord   # where the decision log table lives
-  c.recovery_grace_period = 60           # seconds
-  c.abort_retention = 24 * 60 * 60       # seconds
-  c.on_incomplete_commit = ->(gtrid, failures) { Sentry.capture_message("XA in doubt: #{gtrid}") }
+# Gemfile
+gem "active_xa"
+```
+
+```sh
+bundle install
+bin/rails generate active_xa:install          # add --database NAME if the log should live elsewhere
+bin/rails db:migrate
+```
+
+The generator writes `config/initializers/active_xa.rb` and a migration for the decision log table. List your databases in the initializer:
+
+```ruby
+ActiveXA.configure do |config|
+  config.decision_log_class = "ApplicationRecord"           # where the decision log lives
+  config.participants       = %w[ApplicationRecord LedgerRecord]
+  config.on_incomplete_commit = ->(gtrid, failures) { Rails.error.report(ActiveXA::Error.new("XA in doubt: #{ gtrid }")) }
 end
 ```
 
-Create the decision log table (a migration on the decision log database):
+Then run recovery on a schedule, for example every minute with Solid Queue:
 
-```ruby
-execute ActiveXA::DecisionLog.create_table_sql
+```yaml
+# config/recurring.yml
+production:
+  active_xa_recovery:
+    command: "ActiveXA.recover!"
+    schedule: every minute
 ```
 
-Run recovery on a schedule, passing every class that takes part in ActiveXA transactions:
+or from cron with `bin/rails active_xa:recover`.
+
+## Examples
+
+### Moving money between two databases
 
 ```ruby
-ActiveXA.recover!(PrimaryRecord, TrackerRecord)
+class Transfer
+  def self.call(from:, to:, amount:)
+    ActiveXA.transaction(ApplicationRecord, LedgerRecord) do
+      from.lock!.decrement!(:balance, amount)
+      to.lock!.increment!(:balance, amount)
+      LedgerEntry.create!(from_id: from.id, to_id: to.id, amount:)
+    end
+  end
+end
 ```
 
-A run only clears a decision from the log when it was given every database that transaction used. Recovering a subset, or one shard at a time, is safe; decisions that involve the other databases just stay in the log until a run covers them.
+If the ledger insert fails, neither balance changes.
 
-### The decision log needs a connection of its own
+### Writing to an analytics or tracking database alongside the main one
 
-The decision is written on a second connection from the decision log's pool while the transaction's own connections are still checked out. If the log lives in a participant's pool, every transaction that commits on two databases needs two connections from that pool for a moment.
+```ruby
+ActiveXA.transaction(ApplicationRecord, TrackingRecord) do
+  order = Order.create!(order_params)
+  TrackingEvent.create!(name: "order.created", subject: order)
+end
+```
 
-- Size that pool for it, or give the log a pool of its own: an abstract class with its own `connects_to` entry pointing at the same database.
-- With a pool of one, a transaction that touches both databases waits for `checkout_timeout`, rolls back and raises `DecisionLogFailed`. One that touches a single database still commits, since it needs no log.
-- When the pool is exhausted under load the same thing happens to whichever transactions cannot get the extra connection. Nothing is left half done, but they fail.
+### Rolling back on purpose
+
+```ruby
+ActiveXA.transaction(ApplicationRecord, LedgerRecord) do
+  invoice = Invoice.create!(attrs)
+  LedgerEntry.create!(invoice:)
+  raise ActiveRecord::Rollback if invoice.total.zero?   # both roll back, nothing is raised
+end
+```
+
+### Returning a value, or leaving early
+
+```ruby
+order = ActiveXA.transaction(ApplicationRecord, LedgerRecord) do
+  Order.create!(attrs).tap { |o| LedgerEntry.create!(order: o) }
+end
+
+def place(attrs)
+  ActiveXA.transaction(ApplicationRecord, LedgerRecord) do
+    order = Order.create!(attrs)
+    return order if order.free?     # commits, as `return` does in a Rails transaction
+    LedgerEntry.create!(order:)
+    order
+  end
+end
+```
+
+### Callbacks
+
+```ruby
+class Order < ApplicationRecord
+  after_create_commit { FulfilmentJob.perform_later(self) }  # runs once both databases have committed
+  after_rollback      { Rails.logger.info("order #{ id } rolled back") }
+end
+```
+
+`before_commit` callbacks run while every database is still open, so they may write to either one, and records saved by another database's callbacks get theirs too.
+
+### Nested transactions and savepoints
+
+```ruby
+ActiveXA.transaction(ApplicationRecord, LedgerRecord) do
+  order = Order.create!(attrs)
+
+  Order.transaction(requires_new: true) do     # a savepoint inside the XA branch
+    Coupon.redeem!(code)
+  rescue Coupon::Expired
+    raise ActiveRecord::Rollback                # undoes only the coupon
+  end
+
+  LedgerEntry.create!(order:)
+end
+```
+
+### Retrying a deadlock
+
+A deadlock victim rolls back everywhere and raises `ActiveRecord::Deadlocked`, so the usual retry works:
+
+```ruby
+attempts = 0
+begin
+  Transfer.call(from:, to:, amount:)
+rescue ActiveRecord::Deadlocked
+  retry if (attempts += 1) < 3
+  raise
+end
+```
+
+### Handling commit failures
+
+```ruby
+begin
+  ActiveXA.transaction(ApplicationRecord, LedgerRecord) { ... }
+rescue ActiveXA::PrepareFailed, ActiveXA::DecisionLogFailed
+  # Rolled back everywhere. Safe to retry.
+rescue ActiveXA::OutcomeUnknown
+  # The decision log was unreachable at the critical moment. Nothing was
+  # rolled back; recovery will finish the transaction one way or the other.
+  # Do not retry blindly: check whether the work landed first.
+end
+```
+
+Once the commit decision is logged the transaction counts as committed. A database that then fails to apply `XA COMMIT` does not raise: `on_incomplete_commit` is called and recovery applies it.
+
+### Checking what recovery did
+
+```ruby
+report = ActiveXA.recover!
+report.committed     # => [#<ActiveXA::Xid ...>]  branches committed from the log
+report.rolled_back   # => branches with no decision, rolled back (presumed abort)
+report.skipped       # => branches younger than the grace period
+report.errors        # => [[subject, exception], ...]
+```
+
+## Performance
+
+Two-phase commit costs extra round trips and extra durable writes. A transaction that writes one row to each of two databases:
+
+| | Statements | Durable flushes |
+|---|---:|---:|
+| Nested plain transactions | 6 | 2 |
+| ActiveXA, one database touched | 4 | 1 |
+| ActiveXA, two databases | 12 | 6 |
+
+Measured with `bundle exec rake bench` (2,000 transactions each, one thread, Ruby 4.0.10, Rails 8.1.4, MySQL 9.7 on the same Apple M2 laptop, `innodb_flush_log_at_trx_commit=1`, `sync_binlog=1`):
+
+| Scenario | Mean | p50 | p99 | Transactions/s |
+|---|---:|---:|---:|---:|
+| One database, plain transaction | 0.18 ms | 0.16 ms | 0.47 ms | 5,416 |
+| Two databases, nested plain transactions (not atomic) | 0.35 ms | 0.33 ms | 0.74 ms | 2,838 |
+| ActiveXA, one database touched | 0.23 ms | 0.21 ms | 0.69 ms | 4,347 |
+| ActiveXA, two databases | 0.87 ms | 0.82 ms | 1.53 ms | 1,149 |
+
+In short: atomicity across two databases costs about half a millisecond per transaction here, and a transaction that only touches one database costs almost nothing extra. On Linux servers, where each flush reaches stable storage, the gap grows with your storage's fsync latency, since ActiveXA does three times as many. Run the benchmark on your own hardware before relying on these numbers.
 
 ## How it works
 
 1. A normal Rails transaction is opened on each database, but the adapter issues `XA START` instead of `BEGIN`, lazily, when the database is first queried.
 2. Your block runs.
-3. While all the Rails transactions are still open, ActiveXA runs `before_commit` callbacks, including those of records that another database's callbacks save, then `XA END` and `XA PREPARE` on every database. Each database has now promised it can commit.
+3. While all the transactions are still open, ActiveXA runs `before_commit` callbacks, then `XA END` and `XA PREPARE` on every database. Each database has now promised it can commit.
 4. A commit decision is written to the decision log on a separate connection. This is the point of no return.
-5. `XA COMMIT` runs on every database, then the decision row is deleted.
-6. The Rails blocks exit. Their `COMMIT` is a no-op.
-7. `after_commit` callbacks run, once the data is durable on every database and every connection is an ordinary one again. They can write to any of the databases, or start another ActiveXA transaction.
+5. `XA COMMIT` runs on every database, then the decision is deleted.
+6. `after_commit` callbacks run.
 
-If only one database was touched, ActiveXA uses `XA COMMIT ... ONE PHASE` and skips the log.
+Recovery resolves anything a crash leaves prepared: a branch whose transaction has a logged decision is committed, one without is rolled back. Before rolling back, recovery writes an abort marker, so a coordinator that turns out to be alive cannot commit afterwards. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the details.
 
-## What it guarantees
+## What it does not do
 
-Before the decision is logged, any failure rolls back every database and raises (`PrepareFailed`, `DecisionLogFailed`, or your block's own exception). `after_rollback` callbacks fire once every database has rolled back.
+- **No isolation across databases.** Between the first and last `XA COMMIT` (normally microseconds), a reader can see one database's new data without the other's.
+- **Locks wait for recovery.** A prepared branch holds its row locks until it is resolved. If a database becomes unreachable after `PREPARE`, those rows stay locked until recovery runs, so run it often.
+- **No DDL inside the block.** MySQL does not allow implicit commits in an XA transaction.
+- **ActiveXA must open the outermost transaction** on every participant; it raises `TransactionAlreadyOpen` otherwise. That also means transactional tests cannot wrap ActiveXA code: use truncation for those tests.
 
-After the decision is logged, the transaction is committed, even if a database fails to apply `XA COMMIT`. ActiveXA does not raise in that case, because a caller retrying would duplicate work. The failed branch stays `PREPARED`, the connection holding it is discarded, `on_incomplete_commit` is called, and `ActiveXA.recover!` commits it.
+## Requirements
 
-Nothing rolls a branch back once the decision may be in the log. If an exception is raised into the thread at that point (a request timeout, an interrupt) or the thread is killed, the branches that have not committed yet stay `PREPARED` for recovery; they are not undone alongside ones that already committed. `after_commit` callbacks still run, because the data is committed.
+- MySQL 8.0.30 or later with InnoDB, row-based or mixed binary logging, and no replication filters on the tables involved.
+- Rails 8.1 with `mysql2` (Trilogy is hooked the same way but untested).
+- Ruby 4.0 or later.
+- The recovery user needs the `XA_RECOVER_ADMIN` privilege. Check that your managed host allows external XA.
+- The decision log takes a second connection from its pool for a moment at each two-database commit. Size that pool for it.
 
-If writing the decision fails, ActiveXA asks the log which way it went, since a row can be written and its acknowledgement lost. If the decision turns out to be there, the commit goes ahead. If it is not, everything is rolled back and `DecisionLogFailed` is raised. If the log cannot be reached to ask, ActiveXA raises `OutcomeUnknown`, rolls nothing back and runs no commit or rollback callbacks: the branches stay `PREPARED` and recovery finishes the transaction whichever way the log says.
+## Documentation
 
-If the process dies mid-transaction, recovery uses presumed abort: a prepared branch with a logged commit decision is committed, and one without is rolled back. Before rolling back, recovery writes an abort marker for the transaction into the decision log. A marker and a commit decision cannot both exist, so if the coordinator turns out to be alive after all (the transaction may simply have run for longer than the grace period), its commit is refused and it rolls back too, raising `DecisionLogFailed`. Branches younger than the grace period are left alone so that recovery does not abort transactions that are merely still running.
+- [Architecture](docs/ARCHITECTURE.md): the commit protocol, recovery, clocks and failure handling
+- [Install & setup](docs/INSTALL.md): setup in an app, and working on the gem
+- [Usage](docs/USAGE.md): configuration, errors and the recovery report
+- [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-## What it does not guarantee
-
-**Isolation across databases.** Two-phase commit gives atomicity, not a global snapshot. Between the first and last `XA COMMIT` (normally microseconds; longer if a commit is in doubt), another reader can see the primary's new data without the tracker's.
-
-**Availability under failure.** A prepared branch holds its row locks until it's resolved. If a database is unreachable after PREPARE, those rows stay locked until recovery runs. Run recovery frequently. A database that recovery cannot reach, or on which it lacks `XA_RECOVER_ADMIN`, is reported in `report.errors` and does not stop the branches on the other databases being resolved.
-
-**A shared transaction on a shared server.** Two databases on the same MySQL server still get two separate branches. MySQL treats them as unrelated transactions: neither sees the other's uncommitted changes, and if both touch the same row (through a cross-database query, a trigger or a foreign key) the second waits for the first until it hits `innodb_lock_wait_timeout`.
-
-## Clocks, the grace period and long transactions
-
-The grace period is measured from when a transaction started. That time is part of its XID and comes from the clock of the app server that began it; recovery compares it with the clock of the host it runs on. Keep those clocks in step (NTP is plenty) and the grace period well above any drift between them.
-
-Neither clock drift nor a slow transaction can split a transaction across databases, because the decision log has the last word. What they can do is get a healthy transaction aborted: if recovery looks at a transaction older than the grace period at the moment its branches are prepared but its decision is not yet written, it rolls it back and the coordinator raises `DecisionLogFailed`. That window is a few milliseconds per transaction, so it takes a transaction that outlives the grace period and some bad luck. Set `recovery_grace_period` above your longest transaction if you would rather it never happened; the cost is that branches orphaned by a crash hold their locks for that long.
-
-`abort_retention` is how long recovery keeps the abort marker it writes when it rolls a transaction back. The marker is what refuses a late commit from that transaction's coordinator, so it must outlast any pause a coordinator could survive. The default is a day. The rows are tiny and only appear when recovery aborts something.
-
-## Requirements and limitations
-
-- MySQL 8.0.30 or later with InnoDB. Earlier versions can leave XA state and the binary log inconsistent after a crash.
-- Row-based or mixed binary logging, and no replication filters on these tables.
-- The recovery user needs the `XA_RECOVER_ADMIN` privilege. Check your managed host allows external XA.
-- Tested against Rails 8.1 with `mysql2`. It hooks undocumented adapter internals (`internal_execute`, the transaction stack), so each Rails minor version needs testing before support is declared.
-- ActiveXA must open the outermost transaction on every participant. It raises `TransactionAlreadyOpen` otherwise, which also means transactional tests can't wrap ActiveXA code. Use truncation for those tests.
-- No DDL inside the block (MySQL implicit commits aren't allowed in XA).
-- A database only stays out of a transaction it isn't touched in while its connection begins transactions lazily, which is Rails' default. Calling `raw_connection` on a connection switches that off for good; its branch then starts as soon as the transaction opens and always takes part in the two-phase commit.
-- `XA RECOVER` is server-wide. Recovery de-duplicates branches when participants share a server, and only touches branches that belong to its own decision log. Every XID carries a namespace derived from the name of the database the log lives in, so another application on the same server, or another environment of this one, is left alone. If two installations that share a server keep their logs in databases of the same name, give each a `config.namespace`.
-
-## Running the tests
-
-Tests run against a real MySQL server with two databases, `xa_primary` and `xa_tracker`:
+## Development
 
 ```sh
-MYSQL_USER=xa MYSQL_PASSWORD=xa bundle exec rake
+bin/setup                 # bundle install, create xa_primary / xa_tracker and the xa user
+bundle exec rake          # tests, against a real MySQL server
+bundle exec rubocop
+bundle exec rake bench    # the benchmark above
 ```
 
-Set `SQL_LOG=1` to see the XA statements. To use a server on another port, set `MYSQL_HOST=127.0.0.1 MYSQL_TCP_PORT=3307`.
+Point the tests at another server with `MYSQL_HOST`, `MYSQL_TCP_PORT`, `MYSQL_USER` and `MYSQL_PASSWORD`. Set `SQL_LOG=1` to see the XA statements. The tests drop tables and roll back every prepared XA branch they can see, so never run them against a server with data you care about.
+
+## License
+
+[MIT](LICENSE), © 2026 Vlad Radulescu, Studio51 Solutions.

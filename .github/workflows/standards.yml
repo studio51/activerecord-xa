@@ -1,0 +1,30 @@
+name: Standards
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  # The README structure check is left out on purpose: this gem keeps a full
+  # README (overview, examples, guarantees), by the owner's choice. All other
+  # checks apply as standard.
+  required_files:
+    name: Required files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Every repo carries the standard files
+        run: |
+          missing=""
+          for f in README.md LICENSE CHANGELOG.md CONTRIBUTING.md CODE_OF_CONDUCT.md; do
+            [ -f "$f" ] || missing="$missing $f"
+          done
+          if [ -n "$missing" ]; then
+            echo "Missing required file(s):"
+            for f in $missing; do echo "  - $f"; done
+            echo
+            echo "The Studio51 standard requires: README.md (use), LICENSE"
+            echo "(distribute), CHANGELOG.md (release), CONTRIBUTING.md and"
+            echo "CODE_OF_CONDUCT.md (contribute)."
+            exit 1
+          fi
+          echo "Required files present."

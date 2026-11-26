@@ -1,10 +1,18 @@
 # frozen_string_literal: true
 
+require "bundler/setup"
+require "bundler/gem_tasks"
 require "rake/testtask"
 
-Rake::TestTask.new(:test) do |t|
-  t.libs << "test"
-  t.test_files = FileList["test/*_test.rb"]
+Rake::TestTask.new(:test) do |task|
+  task.libs << "test" << "lib"
+  task.pattern = "test/**/*_test.rb"
+  task.warning = false
 end
 
 task default: :test
+
+desc "Measure the cost of a transaction with and without ActiveXA (needs the test databases)"
+task :bench do
+  ruby "benchmark/transactions.rb"
+end

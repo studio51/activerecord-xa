@@ -12,7 +12,7 @@ class DeadlockTest < ActiveXATestCase
 
     assert_equal %w[a b], Order.order(:id).pluck(:name)
     assert_equal 0, TrackerEvent.count
-    assert_includes Events.log, [:order_after_rollback]
+    assert_includes Events.log, [ :order_after_rollback ]
     assert_empty prepared_xids(PrimaryRecord)
     assert_connections_still_work
   end
@@ -50,14 +50,14 @@ class DeadlockTest < ActiveXATestCase
       waiting = nil
 
       rival.execute("BEGIN")
-      rival.execute("UPDATE orders SET name = 'rival' WHERE id = #{b.id}")
+      rival.execute("UPDATE orders SET name = 'rival' WHERE id = #{ b.id }")
       # InnoDB sacrifices the transaction that has done less work. Make that ours.
-      20.times { |i| rival.execute("INSERT INTO orders (name) VALUES ('padding #{i}')") }
+      20.times { |i| rival.execute("INSERT INTO orders (name) VALUES ('padding #{ i }')") }
 
       ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
         TrackerEvent.create!(name: "tracked")
         a.update!(name: "ours")
-        waiting = Thread.new { rival.execute("UPDATE orders SET name = 'rival' WHERE id = #{a.id}") }
+        waiting = Thread.new { rival.execute("UPDATE orders SET name = 'rival' WHERE id = #{ a.id }") }
         waiting.report_on_exception = false
         yield -> { Order.where(id: b.id).update_all(name: "ours") }
       end
@@ -77,6 +77,6 @@ class DeadlockTest < ActiveXATestCase
       ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "xa"); TrackerEvent.create!(name: "xa") }
 
       assert_equal %w[plain xa], Order.order(:id).last(2).map(&:name)
-      assert_equal ["xa"], TrackerEvent.pluck(:name)
+      assert_equal [ "xa" ], TrackerEvent.pluck(:name)
     end
 end

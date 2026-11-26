@@ -18,7 +18,7 @@ base = {
   host: ENV.fetch("MYSQL_HOST", "localhost"),
   username: ENV.fetch("MYSQL_USER", "xa"),
   password: ENV.fetch("MYSQL_PASSWORD", "xa"),
-  pool: 5,
+  pool: 5
 }
 # A second pool on the tracker database whose name is 36 characters but 108
 # bytes, to check that XIDs respect MySQL's byte limits.
@@ -29,8 +29,8 @@ ActiveRecord::Base.configurations = {
     "tracker" => base.merge(database: "xa_tracker"),
     WIDE_NAME => base.merge(database: "xa_tracker"),
     # Nothing listens here, so connecting fails at once.
-    "unreachable" => base.merge(database: "xa_primary", host: "127.0.0.1", port: 1),
-  },
+    "unreachable" => base.merge(database: "xa_primary", host: "127.0.0.1", port: 1)
+  }
 }
 ActiveRecord::Base.logger = Logger.new(ENV["SQL_LOG"] ? $stdout : nil)
 
@@ -60,22 +60,22 @@ module Events
 end
 
 class Order < PrimaryRecord
-  after_commit { Events.log << [:order_after_commit, id] }
-  after_rollback { Events.log << [:order_after_rollback] }
+  after_commit { Events.log << [ :order_after_commit, id ] }
+  after_rollback { Events.log << [ :order_after_rollback ] }
 end
 
 class TrackerEvent < TrackerRecord
   attr_accessor :check_order_visible
 
-  before_commit { Events.log << [:tracker_before_commit] }
+  before_commit { Events.log << [ :tracker_before_commit ] }
   after_commit do
     if check_order_visible
       # Read through an unrelated connection: is the primary write durable?
       pool = PrimaryRecord.connection_pool
       conn = pool.checkout
       begin
-        Events.log << [:order_visible_in_tracker_after_commit,
-                       conn.select_value("SELECT COUNT(*) FROM orders").to_i]
+        Events.log << [ :order_visible_in_tracker_after_commit,
+                       conn.select_value("SELECT COUNT(*) FROM orders").to_i ]
       ensure
         pool.checkin(conn)
       end
@@ -116,11 +116,11 @@ module StrayXA
   end
 
   def self.rollback!
-    [PrimaryRecord, TrackerRecord].each do |klass|
+    [ PrimaryRecord, TrackerRecord ].each do |klass|
       prepared(klass).each do |_format_id, gtrid_length, bqual_length, data|
         gl = gtrid_length.to_i
         xid = ActiveXA::Xid.new(data.byteslice(0, gl), data.byteslice(gl, bqual_length.to_i))
-        klass.connection.execute("XA ROLLBACK #{xid.to_sql(klass.connection)}")
+        klass.connection.execute("XA ROLLBACK #{ xid.to_sql(klass.connection) }")
       end
     end
   end
@@ -135,7 +135,7 @@ TrackerRecord.connection.execute("DROP TABLE IF EXISTS tracker_events")
 TrackerRecord.connection.execute(
   "CREATE TABLE tracker_events (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(50)) ENGINE=InnoDB"
 )
-PrimaryRecord.connection.execute("DROP TABLE IF EXISTS #{ActiveXA::DecisionLog::TABLE}")
+PrimaryRecord.connection.execute("DROP TABLE IF EXISTS #{ ActiveXA::DecisionLog::TABLE }")
 
 ActiveXA.configure do |c|
   c.decision_log_class = PrimaryRecord
@@ -156,7 +156,7 @@ module FaultInjection
     define_method(name) do |*args|
       pattern, fault = FaultInjection.rules[name]
       if pattern&.match?(xid.bqual)
-        fault ? fault.call : raise(ActiveRecord::StatementInvalid, "injected #{name} failure")
+        fault ? fault.call : raise(ActiveRecord::StatementInvalid, "injected #{ name } failure")
       end
 
       super(*args)
@@ -176,12 +176,12 @@ class ActiveXATestCase < Minitest::Test
     StrayXA.rollback!
     Order.delete_all
     TrackerEvent.delete_all
-    PrimaryRecord.connection.execute("DELETE FROM #{ActiveXA::DecisionLog::TABLE}")
+    PrimaryRecord.connection.execute("DELETE FROM #{ ActiveXA::DecisionLog::TABLE }")
     ActiveXA.config.on_incomplete_commit = nil
   end
 
   def counts
-    [Order.count, TrackerEvent.count]
+    [ Order.count, TrackerEvent.count ]
   end
 
   def prepared_xids(klass)
@@ -195,7 +195,7 @@ class ActiveXATestCase < Minitest::Test
   end
 
   def leased_connections
-    [PrimaryRecord, TrackerRecord].filter_map { |klass| klass.connection_pool.active_connection? }
+    [ PrimaryRecord, TrackerRecord ].filter_map { |klass| klass.connection_pool.active_connection? }
   end
 
   def new_gtrid(namespace = ActiveXA.decision_log.namespace)
@@ -203,8 +203,8 @@ class ActiveXATestCase < Minitest::Test
   end
 
   def recover(grace:, abort_retention: 3600)
-    ActiveXA::Recovery.new([PrimaryRecord, TrackerRecord], log: ActiveXA.decision_log,
-                                                           grace: grace, abort_retention: abort_retention).run
+    ActiveXA::Recovery.new([ PrimaryRecord, TrackerRecord ], log: ActiveXA.decision_log,
+                                                           grace:, abort_retention:).run
   end
 
   # Runs the block with a decision log that calls +before+ and +after+
@@ -224,7 +224,7 @@ class ActiveXATestCase < Minitest::Test
   # Runs the block as a transaction that started an hour ago, well past any
   # grace period, and returns its gtrid.
   def long_running_transaction(&block)
-    gtrid = new_gtrid.sub(/-\d+-/) { "-#{((Time.now.to_f - 3600) * 1000).to_i}-" }
+    gtrid = new_gtrid.sub(/-\d+-/) { "-#{ ((Time.now.to_f - 3600) * 1000).to_i }-" }
     ActiveXA::Xid.stub(:generate_gtrid, gtrid, &block)
     gtrid
   end

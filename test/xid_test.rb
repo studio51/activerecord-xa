@@ -45,7 +45,7 @@ class XidTest < ActiveXATestCase
       WideNameEvent.create!(name: "tracked")
     end
 
-    assert_equal [1, 1], counts
+    assert_equal [ 1, 1 ], counts
     assert_empty prepared_xids(PrimaryRecord)
   end
 end
