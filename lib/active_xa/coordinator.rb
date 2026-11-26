@@ -213,7 +213,7 @@ module ActiveXA
       def log_commit_decision(active)
         @outcome = :unknown
         active.each(&:mark_in_doubt!)
-        @log.record_commit!(@gtrid, active)
+        @log.record_commit!(@gtrid, active.map { |branch| branch.connection.pool.db_config.name })
         @outcome = :committed
       rescue ActiveRecord::ConnectionNotEstablished => e
         # No connection to the log could be had (it is down, or its pool is

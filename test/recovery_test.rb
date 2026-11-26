@@ -137,6 +137,16 @@ class RecoveryTest < ActiveXATestCase
     assert_equal 2, prepared_xids(PrimaryRecord).size
   end
 
+  def test_a_decision_is_only_pruned_by_a_run_that_covers_all_its_databases
+    gtrid = new_gtrid
+    ActiveXA.decision_log.record_commit!(gtrid, %w[primary tracker])
+
+    partial = ActiveXA::Recovery.new([PrimaryRecord], log: ActiveXA.decision_log, grace: 0).run
+    assert_empty partial.pruned, "a branch may be waiting on the database this run was not given"
+
+    assert_equal [gtrid], recover(grace: 0).pruned
+  end
+
   def test_a_database_that_cannot_be_reached_does_not_hold_up_the_others
     gtrid = simulate_crash(log_decision: true)
 
@@ -165,7 +175,7 @@ class RecoveryTest < ActiveXATestCase
       end
 
       if log_decision
-        ActiveXA.decision_log.record_commit!(gtrid, [])
+        ActiveXA.decision_log.record_commit!(gtrid, %w[primary tracker])
       end
 
       branches.each do |klass, conn|

@@ -108,9 +108,16 @@ module ActiveXA
       #
       # An abort marker stays for abort_retention, in case the coordinator it
       # stopped is still alive and about to try its commit.
+      #
+      # Either way, only a run that was given every database a transaction
+      # used has seen all its branches. A decision naming any other database
+      # is left for a run that covers it.
       def prune_log(started, outstanding_gtrids, report)
-        @log.expired(started, commit_age: @grace, abort_age: @abort_retention).each do |gtrid|
+        covered = @pools.map { |pool| pool.db_config.name }
+
+        @log.expired(started, commit_age: @grace, abort_age: @abort_retention).each do |gtrid, participants|
           next if outstanding_gtrids.include?(gtrid)
+          next unless (participants - covered).empty?
 
           @log.complete!(gtrid)
           report.pruned << gtrid

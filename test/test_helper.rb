@@ -212,9 +212,9 @@ class ActiveXATestCase < Minitest::Test
   def with_decision_log(before: nil, after: nil)
     log = ActiveXA.decision_log
     log.singleton_class.prepend(Module.new do
-      define_method(:record_commit!) do |gtrid, branches|
+      define_method(:record_commit!) do |gtrid, participants|
         before&.call(gtrid)
-        super(gtrid, branches)
+        super(gtrid, participants)
         after&.call(gtrid)
       end
     end)

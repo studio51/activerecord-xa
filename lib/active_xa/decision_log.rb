@@ -52,9 +52,11 @@ module ActiveXA
       with_connection { |c| c.execute(self.class.create_table_sql) }
     end
 
-    # Raises ActiveRecord::RecordNotUnique if the gtrid is already decided.
-    def record_commit!(gtrid, branches)
-      insert(gtrid, :commit, branches.map { |b| b.xid.bqual })
+    # +participants+ names the databases that hold a branch, so that recovery
+    # can tell when it has looked at all of them. Raises
+    # ActiveRecord::RecordNotUnique if the gtrid is already decided.
+    def record_commit!(gtrid, participants)
+      insert(gtrid, :commit, participants)
     end
 
     # Decides "abort" unless a decision is already there. Returns the
@@ -87,15 +89,17 @@ module ActiveXA
     end
 
     # Decisions old enough to prune as of +time+ (a value from #now): commits
-    # after +commit_age+ seconds, abort markers after +abort_age+.
+    # after +commit_age+ seconds, abort markers after +abort_age+. Returns
+    # [gtrid, participants] pairs.
     def expired(time, commit_age:, abort_age:)
-      with_connection do |c|
-        c.select_values(<<~SQL)
-          SELECT gtrid FROM #{TABLE}
+      rows = with_connection do |c|
+        c.select_rows(<<~SQL)
+          SELECT gtrid, participants FROM #{TABLE}
           WHERE created_at <= CAST(#{c.quote(time)} AS DATETIME(6)) - INTERVAL
             (CASE outcome WHEN 'commit' THEN #{microseconds(commit_age)} ELSE #{microseconds(abort_age)} END) MICROSECOND
         SQL
       end
+      rows.map { |gtrid, participants| [gtrid, JSON.parse(participants)] }
     end
 
     private

@@ -37,6 +37,8 @@ Run recovery on a schedule, passing every class that takes part in ActiveXA tran
 ActiveXA.recover!(PrimaryRecord, TrackerRecord)
 ```
 
+A run only clears a decision from the log when it was given every database that transaction used. Recovering a subset, or one shard at a time, is safe; decisions that involve the other databases just stay in the log until a run covers them.
+
 ### The decision log needs a connection of its own
 
 The decision is written on a second connection from the decision log's pool while the transaction's own connections are still checked out. If the log lives in a participant's pool, every transaction that commits on two databases needs two connections from that pool for a moment.
