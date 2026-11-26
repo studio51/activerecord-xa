@@ -126,6 +126,20 @@ class DecisionTest < ActiveXATestCase
     assert_equal [0, 0], counts
   end
 
+  def test_a_failing_on_incomplete_commit_callback_does_not_fail_the_transaction
+    ActiveXA.config.on_incomplete_commit = ->(*) { raise "pager is down" }
+    FaultInjection.rules = { commit!: /tracker/ }
+    order = nil
+
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      order = Order.create!(name: "order")
+      TrackerEvent.create!(name: "tracked")
+    end
+
+    assert_predicate order, :persisted?
+    assert_includes Events.log, [:order_after_commit, order.id]
+  end
+
   private
     # The outcome is not known to this process, so neither kind may run.
     def assert_no_commit_or_rollback_callbacks

@@ -266,6 +266,10 @@ module ActiveXA
         details = failures.map { |b, e| "#{b.xid}: #{e.class}: #{e.message}" }.join("; ")
         @config.logger&.error("ActiveXA: #{@gtrid} committed but not yet applied everywhere: #{details}")
         @config.on_incomplete_commit&.call(@gtrid, failures)
+      rescue => e
+        # The transaction is committed. A notifier that fails must not make
+        # it look otherwise to the caller.
+        @config.logger&.error("ActiveXA: on_incomplete_commit raised #{e.class}: #{e.message}")
       end
 
       def discard_connection(connection)
