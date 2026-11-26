@@ -11,3 +11,8 @@ Rake::TestTask.new(:test) do |task|
 end
 
 task default: :test
+
+desc "Measure the cost of a transaction with and without ActiveXA (needs the test databases)"
+task :bench do
+  ruby "benchmark/transactions.rb"
+end
