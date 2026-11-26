@@ -208,14 +208,18 @@ module ActiveXA
         active.each(&:mark_in_doubt!)
         @log.record_commit!(@gtrid, active)
         @outcome = :committed
+      rescue ActiveRecord::ConnectionNotEstablished => e
+        # No connection to the log could be had (it is down, or its pool is
+        # exhausted), so the insert was never sent and nothing is in doubt.
+        abandon_commit(active, e)
       rescue => e
         settle_failed_decision(active, e)
       end
 
-      # A failed insert proves nothing: the row can be written and its
-      # acknowledgement lost, or recovery may have decided first. The log
-      # settles it. We ask for "abort", which the primary key refuses if the
-      # commit row is there, and go with whichever decision stands.
+      # An insert that was sent and failed proves nothing: the row can be
+      # written and its acknowledgement lost, or recovery may have decided
+      # first. The log settles it. We ask for "abort", which the primary key
+      # refuses if the commit row is there, and go with whichever stands.
       def settle_failed_decision(active, error)
         standing = begin
           @log.settle!(@gtrid)
@@ -227,11 +231,15 @@ module ActiveXA
         if standing == :commit
           @outcome = :committed
         else
-          active.each(&:release_from_doubt!)
-          rollback_all(active)
-          @outcome = :rolled_back
-          raise DecisionLogFailed, decision_failure_message(error)
+          abandon_commit(active, error)
         end
+      end
+
+      def abandon_commit(active, error)
+        active.each(&:release_from_doubt!)
+        rollback_all(active)
+        @outcome = :rolled_back
+        raise DecisionLogFailed, decision_failure_message(error)
       end
 
       def decision_failure_message(error)

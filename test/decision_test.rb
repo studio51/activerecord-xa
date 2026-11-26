@@ -111,6 +111,19 @@ class DecisionTest < ActiveXATestCase
     assert_includes Events.log, [:order_after_rollback]
   end
 
+  def test_a_decision_that_was_never_sent_rolls_back_without_consulting_the_log
+    with_decision_log(before: ->(_) { raise ActiveRecord::ConnectionTimeoutError, "no connection to the log" }) do |log|
+      def log.settle!(*) = raise("the log should not be asked: nothing was sent")
+
+      error = assert_raises(ActiveXA::DecisionLogFailed) { write_to_both }
+      assert_match(/no connection to the log/, error.message)
+    end
+
+    assert_equal [0, 0], counts
+    assert_empty prepared_xids(PrimaryRecord)
+    assert_includes Events.log, [:order_after_rollback]
+  end
+
   def test_nothing_is_rolled_back_while_the_log_cannot_say_what_was_decided
     with_decision_log(before: ->(_) { raise ActiveRecord::ConnectionFailed, "log is down" }) do |log|
       def log.settle!(*) = raise(ActiveRecord::ConnectionFailed, "still down")
