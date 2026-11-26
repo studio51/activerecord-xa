@@ -79,6 +79,26 @@ class WideNameEvent < WideNameRecord
   self.table_name = "tracker_events"
 end
 
+# A prepared branch outlives the process that made it and keeps its metadata
+# locks, so one left behind by an earlier run would block the DROP TABLE
+# below forever. Clear them here, and again before every test.
+module StrayXA
+  def self.prepared(klass)
+    klass.connection.select_rows("XA RECOVER").select { |row| row[0].to_i == ActiveXA::Xid::FORMAT_ID }
+  end
+
+  def self.rollback!
+    [PrimaryRecord, TrackerRecord].each do |klass|
+      prepared(klass).each do |_format_id, gtrid_length, bqual_length, data|
+        gl = gtrid_length.to_i
+        xid = ActiveXA::Xid.new(data.byteslice(0, gl), data.byteslice(gl, bqual_length.to_i))
+        klass.connection.execute("XA ROLLBACK #{xid.to_sql(klass.connection)}")
+      end
+    end
+  end
+end
+StrayXA.rollback!
+
 PrimaryRecord.connection.execute("DROP TABLE IF EXISTS orders")
 PrimaryRecord.connection.execute(
   "CREATE TABLE orders (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(50), audit VARCHAR(50)) ENGINE=InnoDB"
@@ -117,7 +137,7 @@ class ActiveXATestCase < Minitest::Test
   def setup
     FaultInjection.rules = {}
     Events.clear
-    rollback_stray_xa
+    StrayXA.rollback!
     Order.delete_all
     TrackerEvent.delete_all
     PrimaryRecord.connection.execute("DELETE FROM #{ActiveXA::DecisionLog::TABLE}")
@@ -129,7 +149,7 @@ class ActiveXATestCase < Minitest::Test
   end
 
   def prepared_xids(klass)
-    klass.connection.select_rows("XA RECOVER").select { |r| r[0].to_i == ActiveXA::Xid::FORMAT_ID }
+    StrayXA.prepared(klass)
   end
 
   # Runs the block in a thread that holds no connections yet, like a fresh
@@ -141,15 +161,4 @@ class ActiveXATestCase < Minitest::Test
   def leased_connections
     [PrimaryRecord, TrackerRecord].filter_map { |klass| klass.connection_pool.active_connection? }
   end
-
-  private
-    def rollback_stray_xa
-      [PrimaryRecord, TrackerRecord].each do |klass|
-        prepared_xids(klass).each do |_f, gl, bl, data|
-          gl = gl.to_i
-          sql = "#{klass.connection.quote(data[0, gl])},#{klass.connection.quote(data[gl, bl.to_i])},#{ActiveXA::Xid::FORMAT_ID}"
-          klass.connection.execute("XA ROLLBACK #{sql}")
-        end
-      end
-    end
 end
