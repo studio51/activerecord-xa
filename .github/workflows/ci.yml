@@ -11,11 +11,35 @@ jobs:
       matrix:
         # Latest stable only, Studio51 does not maintain older Rubies.
         ruby: ["4.0.10"]
+        # The oldest MySQL ActiveXA supports and the current LTS.
+        mysql: ["8.0", "8.4"]
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql }}
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    env:
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_TCP_PORT: "3306"
     steps:
       - uses: actions/checkout@v6
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
+      - name: Create the test databases and user
+        run: |
+          mysql -h 127.0.0.1 -u root <<'SQL'
+          CREATE DATABASE xa_primary;
+          CREATE DATABASE xa_tracker;
+          CREATE USER 'xa'@'%' IDENTIFIED BY 'xa';
+          GRANT ALL ON xa_primary.* TO 'xa'@'%';
+          GRANT ALL ON xa_tracker.* TO 'xa'@'%';
+          GRANT XA_RECOVER_ADMIN ON *.* TO 'xa'@'%';
+          SQL
       - run: bundle exec rubocop
       - run: bundle exec rake
