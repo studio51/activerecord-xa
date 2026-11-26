@@ -31,9 +31,16 @@ module ActiveXA
     # connection, outside the XA transaction.
     attr_accessor :decision_log_class
 
-    # Recovery leaves branches younger than this alone, so it never races a
-    # coordinator that is still mid-commit.
+    # Recovery leaves branches younger than this alone, so it does not abort
+    # a transaction that is simply still running. Seconds, counted from when
+    # the transaction started.
     attr_accessor :recovery_grace_period
+
+    # How long recovery keeps the "abort" marker it writes when it rolls back
+    # an undecided transaction. The marker is what stops that transaction's
+    # coordinator, should it still be alive, from committing afterwards, so
+    # this must be longer than any coordinator could stall. Seconds.
+    attr_accessor :abort_retention
 
     # Called as ->(gtrid, failures) when the commit decision was logged but
     # one or more databases failed to apply XA COMMIT. The transaction counts
@@ -44,6 +51,7 @@ module ActiveXA
 
     def initialize
       @recovery_grace_period = 60
+      @abort_retention = 24 * 60 * 60
       @logger = Logger.new($stderr, progname: "ActiveXA")
       @on_incomplete_commit = nil
     end
@@ -67,7 +75,8 @@ module ActiveXA
     # Resolve prepared-but-unfinished branches. Pass every class that can take
     # part in ActiveXA transactions, so the log can be pruned safely.
     def recover!(*record_classes)
-      Recovery.new(record_classes, log: decision_log, grace: config.recovery_grace_period).run
+      Recovery.new(record_classes, log: decision_log, grace: config.recovery_grace_period,
+                                   abort_retention: config.abort_retention).run
     end
 
     def decision_log

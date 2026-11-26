@@ -14,7 +14,8 @@ module ActiveXA
   #    every connection is an ordinary one again.
   #
   # Any failure before the decision is logged rolls back every branch.
-  # Failures after it leave branches :in_doubt for recovery to commit.
+  # From the moment the decision may be in the log, nothing here rolls a
+  # branch back: what could not be committed is left :in_doubt for recovery.
   class Coordinator
     def initialize(record_classes, log:, config: ActiveXA.config)
       @pools = record_classes.map(&:connection_pool).uniq
@@ -22,8 +23,8 @@ module ActiveXA
       @config = config
       @gtrid = Xid.generate_gtrid
       @branches = []
-      @discard = []
       @rollback_requested = false
+      @outcome = :rolled_back
 
       if @pools.size < 2
         raise ArgumentError, "ActiveXA.transaction needs classes on at least two different databases"
@@ -76,9 +77,11 @@ module ActiveXA
           raise ActiveRecord::Rollback if @rollback_requested
         end
       ensure
-        # Before the connection can reach anyone else through the pool.
+        # Before the connection can reach anyone else through the pool. One
+        # whose branch was left for recovery may still be holding it, so it
+        # is closed to make the server let go.
         connection.active_xa_branch = nil
-        discard_connection(connection) if @discard.include?(connection)
+        discard_connection(connection) if branch&.in_doubt?
       end
 
       # Rails commits when a transaction block exits early via return, break
@@ -103,7 +106,7 @@ module ActiveXA
 
         active = @branches.select(&:started?)
         case active.size
-        when 0 then nil
+        when 0 then @outcome = :committed
         when 1 then commit_one_phase(active.first)
         else two_phase_commit(active)
         end
@@ -136,16 +139,22 @@ module ActiveXA
         end
       end
 
-      # after_commit and after_rollback callbacks, innermost transaction
-      # first as Rails would. By now every participant's transaction has
-      # closed, so a callback can use any of the databases, or start another
-      # ActiveXA transaction, as it could after a plain one. One database's
-      # callbacks failing does not cost the others theirs; the first error
-      # is raised once all have run.
+      # after_commit or after_rollback callbacks, innermost transaction first
+      # as Rails would. Which of the two follows how the global transaction
+      # ended, not how each Rails block happened to exit: an exception that
+      # arrives after the decision is logged unwinds the blocks as a
+      # rollback, but the data is committed. When the outcome is not known,
+      # neither runs.
+      #
+      # By now every participant's transaction has closed, so a callback can
+      # use any of the databases, or start another ActiveXA transaction, as
+      # it could after a plain one. One database's callbacks failing does not
+      # cost the others theirs; the first error is raised once all have run.
       def release_callbacks
+        action = { committed: :commit_records, rolled_back: :rollback_records }[@outcome]
         error = nil
         @branches.reverse_each do |branch|
-          branch.ar_transaction&.active_xa_release_callbacks!
+          branch.ar_transaction&.active_xa_release_callbacks!(action)
         rescue => e
           error ||= e
         end
@@ -153,9 +162,13 @@ module ActiveXA
       end
 
       def commit_one_phase(branch)
+        @outcome = :unknown
         branch.commit_one_phase!
+        @outcome = :committed
       rescue => e
         rollback_all([branch])
+        # If the rollback found nothing to undo, the commit may have landed.
+        @outcome = :rolled_back if branch.state == :rolled_back
         raise PrepareFailed, "one-phase commit failed on #{branch.xid}: #{e.message}"
       end
 
@@ -167,24 +180,15 @@ module ActiveXA
           raise PrepareFailed, "prepare failed: #{e.message}"
         end
 
-        begin
-          @log.record_commit!(@gtrid, active)
-        rescue => e
-          rollback_all(active)
-          raise DecisionLogFailed, "could not log commit decision for #{@gtrid}: #{e.message}"
-        end
+        log_commit_decision(active)
 
         # The decision is durable: from here the transaction IS committed.
         # Failures are not raised, since the caller retrying would duplicate
-        # work. They're reported and left for recovery.
+        # work. They're reported, and the branch stays in doubt for recovery.
         failures = active.filter_map do |branch|
           branch.commit!
           nil
         rescue => e
-          branch.mark_in_doubt!
-          # A session holding a prepared branch can't run other statements,
-          # and the branch can only be committed elsewhere once it detaches.
-          @discard << branch.connection
           [branch, e]
         end
 
@@ -195,13 +199,59 @@ module ActiveXA
         end
       end
 
+      # Once the insert has been sent the decision may be durable, whatever
+      # happens to this process next. So the branches stop being ours to roll
+      # back first: an exception or a killed thread from here on leaves them
+      # prepared for recovery instead of undoing half a committed transaction.
+      def log_commit_decision(active)
+        @outcome = :unknown
+        active.each(&:mark_in_doubt!)
+        @log.record_commit!(@gtrid, active)
+        @outcome = :committed
+      rescue => e
+        settle_failed_decision(active, e)
+      end
+
+      # A failed insert proves nothing: the row can be written and its
+      # acknowledgement lost, or recovery may have decided first. The log
+      # settles it. We ask for "abort", which the primary key refuses if the
+      # commit row is there, and go with whichever decision stands.
+      def settle_failed_decision(active, error)
+        standing = begin
+          @log.settle!(@gtrid)
+        rescue => e
+          raise OutcomeUnknown, "could not log the commit decision for #{@gtrid} (#{error.message}) " \
+                                "or find out whether it was logged (#{e.message}); recovery will finish the transaction"
+        end
+
+        if standing == :commit
+          @outcome = :committed
+        else
+          active.each(&:release_from_doubt!)
+          rollback_all(active)
+          @outcome = :rolled_back
+          raise DecisionLogFailed, decision_failure_message(error)
+        end
+      end
+
+      def decision_failure_message(error)
+        if error.is_a?(ActiveRecord::RecordNotUnique)
+          "recovery rolled #{@gtrid} back before its commit decision was logged; " \
+            "the transaction ran for longer than recovery_grace_period"
+        else
+          "could not log commit decision for #{@gtrid}: #{error.message}"
+        end
+      end
+
       def rollback_all(branches)
         branches.each do |branch|
           branch.rollback!
         rescue => e
-          # Presumed abort: with no decision logged, recovery rolls it back.
-          @config.logger&.error("ActiveXA: rollback of #{branch.xid} failed, recovery will retry: #{e.message}")
-          @discard << branch.connection
+          # Presumed abort: with no commit decision in the log, recovery rolls
+          # it back. Marking it stops Rails trying again as the blocks unwind,
+          # which would only bury the error that brought us here.
+          @config.logger&.error("ActiveXA: could not roll back #{branch.xid}, leaving it to recovery: #{e.message}")
+          branch.mark_in_doubt!
         end
       end
 

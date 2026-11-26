@@ -6,8 +6,10 @@ module ActiveXA
   #   nil -> :active -> :idle -> :prepared -> :committed
   #                 \________\_________\___-> :rolled_back
   #
-  # :in_doubt means the commit decision is logged but XA COMMIT failed here.
-  # The branch must never be rolled back; recovery will commit it.
+  # :in_doubt means this process could not finish the branch and has left it
+  # to recovery: its commit decision may be in the log without XA COMMIT
+  # having been seen to succeed here, or its rollback failed. Either way the
+  # log decides what becomes of it, and nothing here touches it again.
   class Branch
     attr_reader :connection, :xid, :state
     attr_accessor :ar_transaction
@@ -24,6 +26,10 @@ module ActiveXA
 
     def resolved?
       %i[committed rolled_back in_doubt].include?(@state)
+    end
+
+    def in_doubt?
+      @state == :in_doubt
     end
 
     # Rails begins the transaction lazily, and begins it again after rolling
@@ -67,13 +73,18 @@ module ActiveXA
       when :idle, :prepared
         execute("XA ROLLBACK #{xid.to_sql(connection)}")
       when :in_doubt
-        raise Error, "refusing to roll back #{xid}: commit decision already logged"
+        raise Error, "refusing to roll back #{xid}: its commit decision may be logged"
       end
       @state = :rolled_back unless @state.nil?
     end
 
     def mark_in_doubt!
       @state = :in_doubt
+    end
+
+    # The log settled on abort, so the branch is ours to roll back after all.
+    def release_from_doubt!
+      @state = :prepared if in_doubt?
     end
 
     private

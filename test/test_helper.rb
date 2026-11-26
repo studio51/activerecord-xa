@@ -10,6 +10,7 @@ $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
 
 ENV["RAILS_ENV"] = "test"
 require "minitest/autorun"
+require "minitest/mock"
 require "active_xa"
 
 base = {
@@ -138,20 +139,28 @@ ActiveXA.decision_log.create_table!
 # Lets tests make a specific XA step fail on a specific database.
 module FaultInjection
   class << self
-    attr_accessor :rules # { method_name => /bqual pattern/ }
+    # { method_name => /bqual pattern/ } raises StatementInvalid there;
+    # { method_name => [/bqual pattern/, callable] } runs the callable instead.
+    attr_accessor :rules
   end
   self.rules = {}
 
   %i[end_and_prepare! commit! commit_one_phase!].each do |name|
     define_method(name) do |*args|
-      pattern = FaultInjection.rules[name]
-      raise ActiveRecord::StatementInvalid, "injected #{name} failure" if pattern&.match?(xid.bqual)
+      pattern, fault = FaultInjection.rules[name]
+      if pattern&.match?(xid.bqual)
+        fault ? fault.call : raise(ActiveRecord::StatementInvalid, "injected #{name} failure")
+      end
 
       super(*args)
     end
   end
 end
 ActiveXA::Branch.prepend(FaultInjection)
+
+# Not a StandardError: stands in for Interrupt, or for the exception a
+# request timeout raises into a thread.
+class Stop < Exception; end
 
 class ActiveXATestCase < Minitest::Test
   def setup
@@ -180,5 +189,32 @@ class ActiveXATestCase < Minitest::Test
 
   def leased_connections
     [PrimaryRecord, TrackerRecord].filter_map { |klass| klass.connection_pool.active_connection? }
+  end
+
+  def recover(grace:, abort_retention: 3600)
+    ActiveXA::Recovery.new([PrimaryRecord, TrackerRecord], log: ActiveXA.decision_log,
+                                                           grace: grace, abort_retention: abort_retention).run
+  end
+
+  # Runs the block with a decision log that calls +before+ and +after+
+  # around the commit insert, and yields that log.
+  def with_decision_log(before: nil, after: nil)
+    log = ActiveXA.decision_log
+    log.singleton_class.prepend(Module.new do
+      define_method(:record_commit!) do |gtrid, branches|
+        before&.call(gtrid)
+        super(gtrid, branches)
+        after&.call(gtrid)
+      end
+    end)
+    ActiveXA.stub(:decision_log, log) { yield log }
+  end
+
+  # Runs the block as a transaction that started an hour ago, well past any
+  # grace period, and returns its gtrid.
+  def long_running_transaction(&block)
+    gtrid = "axa-#{((Time.now.to_f - 3600) * 1000).to_i}-#{SecureRandom.hex(12)}"
+    ActiveXA::Xid.stub(:generate_gtrid, gtrid, &block)
+    gtrid
   end
 end

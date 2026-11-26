@@ -3,12 +3,17 @@
 module ActiveXA
   # Resolves branches left PREPARED by a crash or a failed commit:
   #
-  # * decision logged  -> XA COMMIT
-  # * no decision      -> XA ROLLBACK (presumed abort)
+  # * "commit" logged  -> XA COMMIT
+  # * no decision      -> log "abort", then XA ROLLBACK (presumed abort)
   #
-  # Only XIDs older than the grace period are touched, so recovery never
-  # races a coordinator that is still between PREPARE and COMMIT. Needs the
-  # XA_RECOVER_ADMIN privilege on each database.
+  # XIDs younger than the grace period are left alone, so recovery does not
+  # disturb a coordinator that is simply mid-commit. That is a courtesy, not
+  # what keeps the two from disagreeing: a transaction can outlive the grace
+  # period, which is measured from when it started. The abort marker is what
+  # makes it safe. It takes the gtrid's place in the log, so a coordinator
+  # that is still alive finds it cannot log "commit" and rolls back too.
+  #
+  # Needs the XA_RECOVER_ADMIN privilege on each database.
   #
   # XA RECOVER lists every prepared XID on the *server*, not just the
   # database the connection points at, so participants sharing a server see
@@ -19,14 +24,17 @@ module ActiveXA
       def initialize = super([], [], [], [], [])
     end
 
-    def initialize(record_classes, log:, grace:)
+    def initialize(record_classes, log:, grace:, abort_retention: ActiveXA.config.abort_retention)
       @pools = record_classes.map(&:connection_pool).uniq
       @log = log
       @grace = grace
+      @abort_retention = abort_retention
     end
 
     def run
       report = Report.new
+      started = @log.now
+      @outcomes = {}
       handled = {}
 
       @pools.each do |pool|
@@ -41,7 +49,7 @@ module ActiveXA
       end
 
       outstanding = (report.skipped + report.errors.map(&:first)).map(&:gtrid)
-      prune_log(outstanding.uniq, report)
+      prune_log(started, outstanding.uniq, report)
       report
     end
 
@@ -52,10 +60,11 @@ module ActiveXA
           return
         end
 
-        if @log.committed?(xid.gtrid)
+        case outcome_of(xid.gtrid)
+        when :commit
           connection.execute("XA COMMIT #{xid.to_sql(connection)}")
           report.committed << xid
-        else
+        when :abort
           connection.execute("XA ROLLBACK #{xid.to_sql(connection)}")
           report.rolled_back << xid
         end
@@ -63,12 +72,26 @@ module ActiveXA
         report.errors << [xid, e]
       end
 
-      # A decision with no branch still outstanding is finished: every branch
-      # has committed (possibly just now), so the row can go.
-      def prune_log(outstanding_gtrids, report)
-        @log.entries.each do |gtrid|
+      # Settled once per run, so every branch of a transaction gets the same
+      # answer. With nothing in the log the answer is "abort", and it is
+      # written down before anything is rolled back.
+      def outcome_of(gtrid)
+        @outcomes[gtrid] ||= @log.outcome(gtrid) || @log.settle!(gtrid)
+      end
+
+      # A decision with no branch still outstanding is finished and its row
+      # can go, once it is old enough.
+      #
+      # For a commit that is the grace period, counted from when the row was
+      # written. A row that old was there before this run looked for prepared
+      # branches, so any that were still waiting have just been committed
+      # above, or are outstanding.
+      #
+      # An abort marker stays for abort_retention, in case the coordinator it
+      # stopped is still alive and about to try its commit.
+      def prune_log(started, outstanding_gtrids, report)
+        @log.expired(started, commit_age: @grace, abort_age: @abort_retention).each do |gtrid|
           next if outstanding_gtrids.include?(gtrid)
-          next unless old_enough?(gtrid)
 
           @log.complete!(gtrid)
           report.pruned << gtrid
@@ -78,7 +101,8 @@ module ActiveXA
       end
 
       def prepared_xids(connection)
-        connection.select_rows("XA RECOVER").filter_map do |format_id, gtrid_length, bqual_length, data|
+        rows = connection.uncached { connection.select_rows("XA RECOVER") }
+        rows.filter_map do |format_id, gtrid_length, bqual_length, data|
           next unless Integer(format_id) == Xid::FORMAT_ID
 
           # The lengths count bytes, and data is not always single-byte.

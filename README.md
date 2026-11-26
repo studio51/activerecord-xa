@@ -54,7 +54,11 @@ Before the decision is logged, any failure rolls back every database and raises 
 
 After the decision is logged, the transaction is committed, even if a database fails to apply `XA COMMIT`. ActiveXA does not raise in that case, because a caller retrying would duplicate work. The failed branch stays `PREPARED`, the connection holding it is discarded, `on_incomplete_commit` is called, and `ActiveXA.recover!` commits it.
 
-If the process dies mid-transaction, recovery uses presumed abort: a prepared branch with a logged decision is committed, and one without is rolled back. Branches younger than the grace period are left alone so recovery never races a live coordinator.
+Nothing rolls a branch back once the decision may be in the log. If an exception is raised into the thread at that point (a request timeout, an interrupt) or the thread is killed, the branches that have not committed yet stay `PREPARED` for recovery; they are not undone alongside ones that already committed. `after_commit` callbacks still run, because the data is committed.
+
+If writing the decision fails, ActiveXA asks the log which way it went, since a row can be written and its acknowledgement lost. If the decision turns out to be there, the commit goes ahead. If it is not, everything is rolled back and `DecisionLogFailed` is raised. If the log cannot be reached to ask, ActiveXA raises `OutcomeUnknown`, rolls nothing back and runs no commit or rollback callbacks: the branches stay `PREPARED` and recovery finishes the transaction whichever way the log says.
+
+If the process dies mid-transaction, recovery uses presumed abort: a prepared branch with a logged commit decision is committed, and one without is rolled back. Before rolling back, recovery writes an abort marker for the transaction into the decision log. A marker and a commit decision cannot both exist, so if the coordinator turns out to be alive after all (the transaction may simply have run for longer than the grace period), its commit is refused and it rolls back too, raising `DecisionLogFailed`. Branches younger than the grace period are left alone so that recovery does not abort transactions that are merely still running.
 
 ## What it does not guarantee
 

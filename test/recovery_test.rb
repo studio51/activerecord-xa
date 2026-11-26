@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
-require "minitest/mock"
 
 class RecoveryTest < ActiveXATestCase
   def test_commit_failure_leaves_branch_in_doubt_and_recovery_commits_it
@@ -20,7 +19,7 @@ class RecoveryTest < ActiveXATestCase
     assert_equal 1, prepared_xids(TrackerRecord).size, "only the tracker branch should be waiting in PREPARED"
 
     FaultInjection.rules = {}
-    report = ActiveXA::Recovery.new([PrimaryRecord, TrackerRecord], log: ActiveXA.decision_log, grace: 0).run
+    report = recover(grace: 0)
 
     assert_equal 1, report.committed.size
     assert_equal [1, 1], counts
@@ -70,11 +69,56 @@ class RecoveryTest < ActiveXATestCase
     assert_equal [1, 1], counts
   end
 
-  private
-    def recover(grace:)
-      ActiveXA::Recovery.new([PrimaryRecord, TrackerRecord], log: ActiveXA.decision_log, grace: grace).run
+  def test_recovery_logs_the_abort_before_rolling_back_and_keeps_the_marker
+    gtrid = simulate_crash(log_decision: false)
+
+    report = recover(grace: 0, abort_retention: 3600)
+    assert_equal 2, report.rolled_back.size
+    assert_equal :abort, ActiveXA.decision_log.outcome(gtrid)
+    assert_raises(ActiveRecord::RecordNotUnique, "a coordinator must not be able to log a commit now") do
+      ActiveXA.decision_log.record_commit!(gtrid, [])
     end
 
+    report = recover(grace: 0, abort_retention: 0)
+    assert_equal [gtrid], report.pruned
+    assert_empty ActiveXA.decision_log.entries
+  end
+
+  def test_every_branch_of_a_transaction_gets_the_same_outcome
+    gtrid = simulate_crash(log_decision: false)
+    log = ActiveXA.decision_log
+    late_commit = nil
+    # The coordinator turns out to be alive: it tries to log its commit as
+    # soon as recovery has dealt with the first branch.
+    log.singleton_class.prepend(Module.new do
+      define_method(:settle!) do |settled_gtrid|
+        super(settled_gtrid).tap do
+          late_commit = begin
+            record_commit!(settled_gtrid, [])
+            :logged
+          rescue ActiveRecord::RecordNotUnique
+            :refused
+          end
+        end
+      end
+    end)
+
+    report = ActiveXA::Recovery.new([PrimaryRecord, TrackerRecord], log: log, grace: 0).run
+
+    assert_equal :refused, late_commit
+    assert_equal [gtrid, gtrid], report.rolled_back.map(&:gtrid)
+    assert_equal [0, 0], counts
+  end
+
+  def test_a_commit_decision_is_pruned_by_its_own_age_not_the_transactions
+    gtrid = long_running_transaction { ActiveXA.decision_log.record_commit!(ActiveXA::Xid.generate_gtrid, []) }
+
+    report = recover(grace: 3600)
+    assert_empty report.pruned, "the decision was logged a moment ago, however long ago the transaction began"
+    assert_equal [gtrid], ActiveXA.decision_log.entries
+  end
+
+  private
     # Prepare a branch on each database through raw connections, optionally
     # log the decision, then drop the connections as a dying process would.
     def simulate_crash(log_decision:, bqual_name: "crash")

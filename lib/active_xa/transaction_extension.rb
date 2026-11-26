@@ -18,26 +18,24 @@ module ActiveXA
     end
 
     def commit_records
-      return super unless @active_xa_holds_callbacks
-
-      @active_xa_held = :commit_records
+      super unless @active_xa_holds_callbacks
     end
 
     def rollback_records
-      return super unless @active_xa_holds_callbacks
-
-      @active_xa_held = :rollback_records
+      super unless @active_xa_holds_callbacks
     end
 
     def active_xa_hold_callbacks!
       @active_xa_holds_callbacks = true
     end
 
-    # Runs whichever of commit_records / rollback_records Rails asked for.
-    def active_xa_release_callbacks!
+    # Runs :commit_records or :rollback_records, as the coordinator says the
+    # global transaction ended, whatever Rails made of its own block. With
+    # nil it runs neither: Rails does the same when it cannot tell whether a
+    # COMMIT went through.
+    def active_xa_release_callbacks!(action)
       @active_xa_holds_callbacks = false
-      held, @active_xa_held = @active_xa_held, nil
-      public_send(held) if held
+      public_send(action) if action
     end
 
     # Has anything been enrolled since the last pass?
