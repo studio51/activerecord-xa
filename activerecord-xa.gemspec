@@ -28,6 +28,9 @@ Gem::Specification.new do |spec|
   spec.metadata["documentation_uri"]     = "#{ spec.homepage }/tree/main/docs"
   spec.metadata["rubygems_mfa_required"] = "true"
 
+  # An allowlist, so the example app, tests, benchmark and CI config stay in
+  # the repository but out of the gem.
+  #
   spec.files = Dir[
     "lib/**/*",
     "docs/**/*.md",

@@ -10,6 +10,6 @@ class CrashesController < ApplicationController
     Process.wait(pid)
 
     redirect_to root_path, alert: "A checkout process was killed #{ stage.tr("_", " ") }. " \
-                                  "Its branches are prepared and holding their locks; run recovery once they are #{ ActiveXA.config.recovery_grace_period } seconds old."
+                                  "Its branches are prepared and holding their locks; run recovery once they are #{ ActiveRecord::XA.config.recovery_grace_period } seconds old."
   end
 end

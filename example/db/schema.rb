@@ -10,13 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_11_26_184513) do
-  create_table "active_xa_decisions", primary_key: "gtrid", id: { type: :string, limit: 64 }, charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
-    t.string "outcome", limit: 8, null: false
-    t.text "participants", null: false
-    t.datetime "created_at", null: false
-  end
-
+ActiveRecord::Schema[8.1].define(version: 2026_11_26_203942) do
   create_table "orders", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "product_id", null: false
     t.integer "quantity"
@@ -32,6 +26,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_26_184513) do
     t.integer "price_cents"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+  end
+
+  create_table "xa_decisions", primary_key: "gtrid", id: { type: :string, limit: 64 }, charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+    t.string "outcome", limit: 8, null: false
+    t.text "participants", null: false
+    t.datetime "created_at", null: false
   end
 
   add_foreign_key "orders", "products"

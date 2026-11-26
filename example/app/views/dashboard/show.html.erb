@@ -1,5 +1,5 @@
 <header>
-  <h1>ActiveXA example: a shop and a ledger in two MySQL databases</h1>
+  <h1>ActiveRecord::XA example: a shop and a ledger in two MySQL databases</h1>
   <p>Every sale takes stock and creates an order in the <strong>shop</strong> database, and records the money in the <strong>ledger</strong> database. Try each button and watch whether the two stay in step.</p>
 </header>
 
@@ -23,8 +23,8 @@
           <td><%= number_to_currency(product.price_cents / 100.0) %></td>
           <td><%= product.stock %></td>
           <td class="actions">
-            <%= button_to "Buy (ActiveXA)", checkouts_path(product_id: product.id, scenario: "atomic") %>
-            <%= button_to "Buy, card declined (ActiveXA)", checkouts_path(product_id: product.id, scenario: "declined") %>
+            <%= button_to "Buy (ActiveRecord::XA)", checkouts_path(product_id: product.id, scenario: "atomic") %>
+            <%= button_to "Buy, card declined (ActiveRecord::XA)", checkouts_path(product_id: product.id, scenario: "declined") %>
             <%= button_to "Buy, card declined (plain nested transactions)", checkouts_path(product_id: product.id, scenario: "naive_declined"), class: "danger" %>
           </td>
         </tr>

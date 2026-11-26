@@ -12,7 +12,7 @@
 stage = ARGV.fetch(0) { abort "usage: crash_mid_commit.rb after_decision|before_decision" }
 die = -> { Process.kill(:KILL, Process.pid) }
 
-ActiveXA::DecisionLog.prepend(Module.new do
+ActiveRecord::XA::DecisionLog.prepend(Module.new do
   define_method(:record_commit!) do |*args|
     die.call if stage == "before_decision"
     super(*args)

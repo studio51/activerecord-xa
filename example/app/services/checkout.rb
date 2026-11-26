@@ -3,7 +3,7 @@
 # Sells a product: takes it out of stock and creates the order in the shop
 # database, records the money in the ledger database, then charges the card.
 #
-#   Checkout.new(product).call                              # ActiveXA: all or nothing
+#   Checkout.new(product).call                              # ActiveRecord::XA: all or nothing
 #   Checkout.new(product, decline: true).call               # card declined: nothing is kept
 #   Checkout.new(product, decline: true, atomic: false).call  # plain nested transactions: the ledger keeps an orphan
 #
@@ -18,11 +18,11 @@ class Checkout
 
   def call
     if @atomic
-      ActiveXA.transaction(ApplicationRecord, LedgerRecord) do
+      ActiveRecord::XA.transaction(ApplicationRecord, LedgerRecord) do
         record_sale.tap { charge_card }
       end
     else
-      # What Rails gives you without ActiveXA: two independent transactions.
+      # What Rails gives you without ActiveRecord::XA: two independent transactions.
       # The ledger's commits as soon as its block exits, before the card is charged.
       ApplicationRecord.transaction do
         LedgerRecord.transaction { record_sale }.tap { charge_card }

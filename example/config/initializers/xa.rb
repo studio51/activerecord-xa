@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-# ActiveXA: atomic transactions across MySQL databases.
+# ActiveRecord::XA: atomic transactions across MySQL databases.
 #
-ActiveXA.configure do |config|
+ActiveRecord::XA.configure do |config|
   # The decision log lives in the shop database.
   config.decision_log_class = "ApplicationRecord"
 

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Shows both databases side by side, with anything ActiveXA is in the middle of.
+# Shows both databases side by side, with anything ActiveRecord::XA is in the middle of.
 class DashboardController < ApplicationController
   def show
     @products = Product.for_sale.order(:id)
@@ -15,7 +15,7 @@ class DashboardController < ApplicationController
 
     @prepared = prepared_branches
     @decisions = ApplicationRecord.connection.select_all(
-      "SELECT gtrid, outcome, participants, created_at FROM #{ ActiveXA::DecisionLog::TABLE } ORDER BY created_at DESC"
+      "SELECT gtrid, outcome, participants, created_at FROM #{ ActiveRecord::XA::DecisionLog::TABLE } ORDER BY created_at DESC"
     ).to_a
   end
 
@@ -23,10 +23,10 @@ class DashboardController < ApplicationController
     # Prepared XA branches on the server, as recovery would see them.
     def prepared_branches
       ApplicationRecord.connection.select_rows("XA RECOVER").filter_map do |format_id, gtrid_length, _bqual_length, data|
-        next unless format_id.to_i == ActiveXA::Xid::FORMAT_ID
+        next unless format_id.to_i == ActiveRecord::XA::Xid::FORMAT_ID
 
         gtrid = data.byteslice(0, gtrid_length.to_i)
-        { gtrid:, branch: data.byteslice(gtrid_length.to_i..), age: (Time.now - ActiveXA::Xid.created_at(gtrid)).round }
+        { gtrid:, branch: data.byteslice(gtrid_length.to_i..), age: (Time.now - ActiveRecord::XA::Xid.created_at(gtrid)).round }
       end
     end
 end

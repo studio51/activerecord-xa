@@ -17,8 +17,8 @@ default: &default
 development:
   primary:
     <<: *default
-    database: active_xa_example_shop
+    database: xa_example_shop
   ledger:
     <<: *default
-    database: active_xa_example_ledger
+    database: xa_example_ledger
     migrations_paths: db/ledger_migrate
