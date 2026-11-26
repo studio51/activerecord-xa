@@ -54,7 +54,7 @@ class RecoveryTest < ActiveXATestCase
   end
 
   def test_recovery_prunes_decisions_with_nothing_left_to_do
-    ActiveXA.decision_log.record_commit!(ActiveXA::Xid.generate_gtrid, [])
+    ActiveXA.decision_log.record_commit!(new_gtrid, [])
     report = recover(grace: 0)
     assert_equal 1, report.pruned.size
     assert_empty ActiveXA.decision_log.entries
@@ -111,11 +111,30 @@ class RecoveryTest < ActiveXATestCase
   end
 
   def test_a_commit_decision_is_pruned_by_its_own_age_not_the_transactions
-    gtrid = long_running_transaction { ActiveXA.decision_log.record_commit!(ActiveXA::Xid.generate_gtrid, []) }
+    gtrid = long_running_transaction { ActiveXA.decision_log.record_commit!(new_gtrid, []) }
 
     report = recover(grace: 3600)
     assert_empty report.pruned, "the decision was logged a moment ago, however long ago the transaction began"
     assert_equal [gtrid], ActiveXA.decision_log.entries
+  end
+
+  def test_recovery_leaves_another_installations_branches_alone
+    # Another application, or another environment of this one, using the
+    # same server with a decision log of its own.
+    simulate_crash(log_decision: false, gtrid: new_gtrid("0badc0de"))
+
+    report = recover(grace: 0)
+
+    assert_empty report.rolled_back + report.committed + report.skipped
+    assert_empty ActiveXA.decision_log.entries
+    assert_equal 2, prepared_xids(PrimaryRecord).size, "their branches are theirs to decide"
+  end
+
+  def test_recovery_ignores_xids_it_cannot_read
+    simulate_crash(log_decision: false, gtrid: "not-an-activexa-gtrid")
+
+    assert_empty recover(grace: 0).rolled_back
+    assert_equal 2, prepared_xids(PrimaryRecord).size
   end
 
   def test_a_database_that_cannot_be_reached_does_not_hold_up_the_others
@@ -134,8 +153,7 @@ class RecoveryTest < ActiveXATestCase
   private
     # Prepare a branch on each database through raw connections, optionally
     # log the decision, then drop the connections as a dying process would.
-    def simulate_crash(log_decision:, bqual_name: "crash")
-      gtrid = ActiveXA::Xid.generate_gtrid
+    def simulate_crash(log_decision:, bqual_name: "crash", gtrid: new_gtrid)
       branches = [[PrimaryRecord, "orders"], [TrackerRecord, "tracker_events"]].map.with_index do |(klass, table), i|
         conn = klass.connection_pool.checkout
         xid = ActiveXA::Xid.new(gtrid, ActiveXA::Xid.bqual(i, bqual_name))

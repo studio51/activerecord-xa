@@ -19,6 +19,11 @@ module ActiveXA
   # database the connection points at, so participants sharing a server see
   # each other's branches. XIDs are de-duplicated; any connection to the
   # right server can resolve a detached branch.
+  #
+  # It also lists the branches of anyone else using that server. Only XIDs
+  # carrying this decision log's namespace are touched: another
+  # installation's transactions are decided in its own log, and having no
+  # decision for them here says nothing about what it decided.
   class Recovery
     # errors holds [subject, exception] pairs. The subject is the Xid that
     # could not be resolved, the name of a database that could not be asked,
@@ -121,13 +126,13 @@ module ActiveXA
 
           # The lengths count bytes, and data is not always single-byte.
           gl = Integer(gtrid_length)
-          Xid.new(data.byteslice(0, gl), data.byteslice(gl, Integer(bqual_length)))
+          xid = Xid.new(data.byteslice(0, gl), data.byteslice(gl, Integer(bqual_length)))
+          xid if Xid.namespace(xid.gtrid) == @log.namespace
         end
       end
 
       def old_enough?(gtrid)
-        created = Xid.created_at(gtrid)
-        created.nil? || Time.now - created >= @grace
+        Time.now - Xid.created_at(gtrid) >= @grace
       end
 
       def with_connection(pool)

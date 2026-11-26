@@ -42,6 +42,13 @@ module ActiveXA
     # this must be longer than any coordinator could stall. Seconds.
     attr_accessor :abort_retention
 
+    # Recovery only resolves transactions that carry its own namespace, so
+    # that it never touches those of another ActiveXA installation using the
+    # same MySQL servers. It defaults to the name of the decision log's
+    # database. Set it if two installations that share a server keep their
+    # logs in databases of the same name.
+    attr_accessor :namespace
+
     # Called as ->(gtrid, failures) when the commit decision was logged but
     # one or more databases failed to apply XA COMMIT. The transaction counts
     # as committed; recovery completes the stragglers.
@@ -82,7 +89,7 @@ module ActiveXA
     def decision_log
       klass = config.decision_log_class or
         raise ConfigurationError, "set ActiveXA.config.decision_log_class"
-      DecisionLog.new(klass.connection_pool)
+      DecisionLog.new(klass.connection_pool, namespace: config.namespace)
     end
   end
 end

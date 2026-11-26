@@ -21,7 +21,7 @@ module ActiveXA
       @pools = record_classes.map(&:connection_pool).uniq
       @log = log
       @config = config
-      @gtrid = Xid.generate_gtrid
+      @gtrid = Xid.generate_gtrid(log.namespace)
       @branches = []
       @rollback_requested = false
       @outcome = :rolled_back

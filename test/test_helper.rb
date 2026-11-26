@@ -198,6 +198,10 @@ class ActiveXATestCase < Minitest::Test
     [PrimaryRecord, TrackerRecord].filter_map { |klass| klass.connection_pool.active_connection? }
   end
 
+  def new_gtrid(namespace = ActiveXA.decision_log.namespace)
+    ActiveXA::Xid.generate_gtrid(namespace)
+  end
+
   def recover(grace:, abort_retention: 3600)
     ActiveXA::Recovery.new([PrimaryRecord, TrackerRecord], log: ActiveXA.decision_log,
                                                            grace: grace, abort_retention: abort_retention).run
@@ -220,7 +224,7 @@ class ActiveXATestCase < Minitest::Test
   # Runs the block as a transaction that started an hour ago, well past any
   # grace period, and returns its gtrid.
   def long_running_transaction(&block)
-    gtrid = "axa-#{((Time.now.to_f - 3600) * 1000).to_i}-#{SecureRandom.hex(12)}"
+    gtrid = new_gtrid.sub(/-\d+-/) { "-#{((Time.now.to_f - 3600) * 1000).to_i}-" }
     ActiveXA::Xid.stub(:generate_gtrid, gtrid, &block)
     gtrid
   end

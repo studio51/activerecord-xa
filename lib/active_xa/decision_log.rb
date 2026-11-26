@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "digest"
 require "json"
 
 module ActiveXA
@@ -34,8 +35,17 @@ module ActiveXA
       SQL
     end
 
-    def initialize(pool)
+    # Tells this log's transactions from those of any other ActiveXA
+    # installation whose branches show up in the same XA RECOVER: another
+    # application on a shared server, or another environment of this one.
+    # It goes into every gtrid, and recovery leaves other namespaces alone.
+    attr_reader :namespace
+
+    # By default the namespace comes from the name of the database the log
+    # lives in, which is the same from every app server.
+    def initialize(pool, namespace: nil)
       @pool = pool
+      @namespace = Digest::SHA256.hexdigest(namespace || pool.db_config.database.to_s)[0, 8]
     end
 
     def create_table!
