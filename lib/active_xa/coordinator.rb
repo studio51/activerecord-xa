@@ -23,6 +23,7 @@ module ActiveXA
       @gtrid = Xid.generate_gtrid
       @branches = []
       @discard = []
+      @rollback_requested = false
 
       if @pools.size < 2
         raise ArgumentError, "ActiveXA.transaction needs classes on at least two different databases"
@@ -69,6 +70,10 @@ module ActiveXA
           branch.ar_transaction = connection.current_transaction
           branch.ar_transaction.active_xa_hold_callbacks!
           yield
+          # Rails swallows ActiveRecord::Rollback where the innermost
+          # transaction ends. Every participant has to roll back, so each
+          # level raises it again for the one outside it.
+          raise ActiveRecord::Rollback if @rollback_requested
         end
       ensure
         # Before the connection can reach anyone else through the pool.
@@ -85,8 +90,9 @@ module ActiveXA
         outcome = :finished
         finish!
         result
-      rescue Exception
+      rescue Exception => e
         outcome = :raised
+        @rollback_requested = e.is_a?(ActiveRecord::Rollback)
         raise
       ensure
         finish! if outcome == :left_early && Thread.current.status != "aborting"

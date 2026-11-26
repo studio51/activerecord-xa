@@ -32,6 +32,30 @@ class TransactionTest < ActiveXATestCase
     assert_includes Events.log, [:order_after_rollback]
   end
 
+  def test_active_record_rollback_rolls_back_every_database_quietly
+    result = ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      Order.create!(name: "order")
+      TrackerEvent.create!(name: "tracked")
+      raise ActiveRecord::Rollback
+    end
+
+    assert_nil result
+    assert_equal [0, 0], counts
+    assert_includes Events.log, [:order_after_rollback]
+    assert_empty prepared_xids(PrimaryRecord)
+  end
+
+  def test_active_record_rollback_when_only_the_outer_database_was_touched
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      Order.create!(name: "order")
+      raise ActiveRecord::Rollback
+    end
+
+    assert_equal [0, 0], counts
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "next"); TrackerEvent.create!(name: "next") }
+    assert_equal [1, 1], counts
+  end
+
   def test_prepare_failure_rolls_back_the_database_that_already_prepared
     FaultInjection.rules = { end_and_prepare!: /tracker/ }
 

@@ -142,6 +142,16 @@ class CallbacksTest < ActiveXATestCase
     assert_equal ["from after_rollback"], TrackerEvent.pluck(:name)
   end
 
+  def test_active_record_rollback_from_a_before_commit_callback_rolls_back_quietly
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      HookedOrder.create!(name: "order", on_before_commit: -> { raise ActiveRecord::Rollback })
+      TrackerEvent.create!(name: "tracked")
+    end
+
+    assert_equal [0, 0], counts
+    assert_empty prepared_xids(PrimaryRecord)
+  end
+
   def test_before_commit_failure_rolls_everything_back
     assert_raises(RuntimeError) do
       ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
