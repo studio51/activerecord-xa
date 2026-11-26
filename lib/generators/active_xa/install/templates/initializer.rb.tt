@@ -1,0 +1,21 @@
+# frozen_string_literal: true
+
+# ActiveXA: atomic transactions across MySQL databases.
+#
+ActiveXA.configure do |config|
+  # The abstract class whose database holds the decision log table.
+  config.decision_log_class = "ApplicationRecord"
+
+  # Every abstract class whose database takes part in ActiveXA transactions.
+  # `bin/rails active_xa:recover` and `ActiveXA.recover!` use these.
+  config.participants = %w[ApplicationRecord]
+
+  # Seconds a transaction must have been running before recovery touches it.
+  # config.recovery_grace_period = 60
+
+  # Called when a committed transaction could not apply XA COMMIT everywhere;
+  # recovery finishes it. A good place to page someone.
+  # config.on_incomplete_commit = ->(gtrid, failures) { Rails.error.report(ActiveXA::Error.new("XA in doubt: #{ gtrid }")) }
+
+  config.logger = Rails.logger
+end
