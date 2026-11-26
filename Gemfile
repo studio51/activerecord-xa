@@ -9,6 +9,7 @@ gemspec
 group :development, :test do
   gem "rake"
   gem "minitest", "~> 6.1"
+  gem "minitest-mock" # Minitest 6 moved minitest/mock (stub) out into its own gem
   gem "mysql2", "~> 0.5"
   gem "railties", "~> 8.1" # for the install generator and its test
 
