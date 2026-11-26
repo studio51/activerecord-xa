@@ -28,6 +28,8 @@ ActiveRecord::Base.configurations = {
     "primary" => base.merge(database: "xa_primary"),
     "tracker" => base.merge(database: "xa_tracker"),
     WIDE_NAME => base.merge(database: "xa_tracker"),
+    # Nothing listens here, so connecting fails at once.
+    "unreachable" => base.merge(database: "xa_primary", host: "127.0.0.1", port: 1),
   },
 }
 ActiveRecord::Base.logger = Logger.new(ENV["SQL_LOG"] ? $stdout : nil)
@@ -45,6 +47,11 @@ end
 class WideNameRecord < ActiveRecord::Base
   self.abstract_class = true
   connects_to database: { writing: WIDE_NAME.to_sym }
+end
+
+class UnreachableRecord < ActiveRecord::Base
+  self.abstract_class = true
+  connects_to database: { writing: :unreachable }
 end
 
 module Events

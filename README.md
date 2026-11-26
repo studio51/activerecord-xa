@@ -73,7 +73,7 @@ If the process dies mid-transaction, recovery uses presumed abort: a prepared br
 
 **Isolation across databases.** Two-phase commit gives atomicity, not a global snapshot. Between the first and last `XA COMMIT` (normally microseconds; longer if a commit is in doubt), another reader can see the primary's new data without the tracker's.
 
-**Availability under failure.** A prepared branch holds its row locks until it's resolved. If a database is unreachable after PREPARE, those rows stay locked until recovery runs. Run recovery frequently.
+**Availability under failure.** A prepared branch holds its row locks until it's resolved. If a database is unreachable after PREPARE, those rows stay locked until recovery runs. Run recovery frequently. A database that recovery cannot reach, or on which it lacks `XA_RECOVER_ADMIN`, is reported in `report.errors` and does not stop the branches on the other databases being resolved.
 
 **A shared transaction on a shared server.** Two databases on the same MySQL server still get two separate branches. MySQL treats them as unrelated transactions: neither sees the other's uncommitted changes, and if both touch the same row (through a cross-database query, a trigger or a foreign key) the second waits for the first until it hits `innodb_lock_wait_timeout`.
 

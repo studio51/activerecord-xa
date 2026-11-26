@@ -20,6 +20,9 @@ module ActiveXA
   # each other's branches. XIDs are de-duplicated; any connection to the
   # right server can resolve a detached branch.
   class Recovery
+    # errors holds [subject, exception] pairs. The subject is the Xid that
+    # could not be resolved, the name of a database that could not be asked,
+    # or :prune.
     Report = Struct.new(:committed, :rolled_back, :skipped, :pruned, :errors) do
       def initialize = super([], [], [], [], [])
     end
@@ -37,6 +40,8 @@ module ActiveXA
       @outcomes = {}
       handled = {}
 
+      complete = true
+
       @pools.each do |pool|
         with_connection(pool) do |connection|
           prepared_xids(connection).each do |xid|
@@ -46,10 +51,19 @@ module ActiveXA
             resolve(connection, xid, report)
           end
         end
+      rescue => e
+        # A database that is down, or whose user lacks XA_RECOVER_ADMIN, must
+        # not keep the branches on the others waiting.
+        report.errors << [pool.db_config.name, e]
+        complete = false
       end
 
-      outstanding = (report.skipped + report.errors.map(&:first)).map(&:gtrid)
-      prune_log(started, outstanding.uniq, report)
+      # Without an answer from every database there is no telling which
+      # decisions are finished, so nothing is pruned on this run.
+      if complete
+        outstanding = (report.skipped + report.errors.map(&:first).grep(Xid)).map(&:gtrid)
+        prune_log(started, outstanding.uniq, report)
+      end
       report
     end
 

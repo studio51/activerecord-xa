@@ -118,6 +118,19 @@ class RecoveryTest < ActiveXATestCase
     assert_equal [gtrid], ActiveXA.decision_log.entries
   end
 
+  def test_a_database_that_cannot_be_reached_does_not_hold_up_the_others
+    gtrid = simulate_crash(log_decision: true)
+
+    report = ActiveXA::Recovery.new([UnreachableRecord, PrimaryRecord, TrackerRecord],
+                                    log: ActiveXA.decision_log, grace: 0).run
+
+    assert_equal [gtrid, gtrid], report.committed.map(&:gtrid)
+    assert_equal [1, 1], counts
+    assert_equal ["unreachable"], report.errors.map(&:first)
+    assert_empty report.pruned, "the database that was not asked may hold a branch of any decision"
+    assert_equal [gtrid], ActiveXA.decision_log.entries
+  end
+
   private
     # Prepare a branch on each database through raw connections, optionally
     # log the decision, then drop the connections as a dying process would.
