@@ -20,6 +20,7 @@ Inside the block you use models exactly as normal. Only databases the block actu
 ActiveXA.configure do |c|
   c.decision_log_class = PrimaryRecord   # where the decision log table lives
   c.recovery_grace_period = 60           # seconds
+  c.abort_retention = 24 * 60 * 60       # seconds
   c.on_incomplete_commit = ->(gtrid, failures) { Sentry.capture_message("XA in doubt: #{gtrid}") }
 end
 ```
@@ -35,6 +36,14 @@ Run recovery on a schedule, passing every class that takes part in ActiveXA tran
 ```ruby
 ActiveXA.recover!(PrimaryRecord, TrackerRecord)
 ```
+
+### The decision log needs a connection of its own
+
+The decision is written on a second connection from the decision log's pool while the transaction's own connections are still checked out. If the log lives in a participant's pool, every transaction that commits on two databases needs two connections from that pool for a moment.
+
+- Size that pool for it, or give the log a pool of its own: an abstract class with its own `connects_to` entry pointing at the same database.
+- With a pool of one, a transaction that touches both databases waits for `checkout_timeout`, rolls back and raises `DecisionLogFailed`. One that touches a single database still commits, since it needs no log.
+- When the pool is exhausted under load the same thing happens to whichever transactions cannot get the extra connection. Nothing is left half done, but they fail.
 
 ## How it works
 
@@ -66,6 +75,16 @@ If the process dies mid-transaction, recovery uses presumed abort: a prepared br
 
 **Availability under failure.** A prepared branch holds its row locks until it's resolved. If a database is unreachable after PREPARE, those rows stay locked until recovery runs. Run recovery frequently.
 
+**A shared transaction on a shared server.** Two databases on the same MySQL server still get two separate branches. MySQL treats them as unrelated transactions: neither sees the other's uncommitted changes, and if both touch the same row (through a cross-database query, a trigger or a foreign key) the second waits for the first until it hits `innodb_lock_wait_timeout`.
+
+## Clocks, the grace period and long transactions
+
+The grace period is measured from when a transaction started. That time is part of its XID and comes from the clock of the app server that began it; recovery compares it with the clock of the host it runs on. Keep those clocks in step (NTP is plenty) and the grace period well above any drift between them.
+
+Neither clock drift nor a slow transaction can split a transaction across databases, because the decision log has the last word. What they can do is get a healthy transaction aborted: if recovery looks at a transaction older than the grace period at the moment its branches are prepared but its decision is not yet written, it rolls it back and the coordinator raises `DecisionLogFailed`. That window is a few milliseconds per transaction, so it takes a transaction that outlives the grace period and some bad luck. Set `recovery_grace_period` above your longest transaction if you would rather it never happened; the cost is that branches orphaned by a crash hold their locks for that long.
+
+`abort_retention` is how long recovery keeps the abort marker it writes when it rolls a transaction back. The marker is what refuses a late commit from that transaction's coordinator, so it must outlast any pause a coordinator could survive. The default is a day. The rows are tiny and only appear when recovery aborts something.
+
 ## Requirements and limitations
 
 - MySQL 8.0.30 or later with InnoDB. Earlier versions can leave XA state and the binary log inconsistent after a crash.
@@ -84,4 +103,4 @@ Tests run against a real MySQL server with two databases, `xa_primary` and `xa_t
 MYSQL_USER=xa MYSQL_PASSWORD=xa bundle exec rake
 ```
 
-Set `SQL_LOG=1` to see the XA statements.
+Set `SQL_LOG=1` to see the XA statements. To use a server on another port, set `MYSQL_HOST=127.0.0.1 MYSQL_TCP_PORT=3307`.
