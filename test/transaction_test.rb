@@ -236,6 +236,36 @@ class TransactionTest < ActiveXATestCase
     PrimaryRecord.connection_pool.checkin(killer) if killer
   end
 
+  def test_the_default_transaction_isolation_level_applies_to_the_branches
+    ActiveRecord.default_transaction_isolation_level = :read_committed
+    newly_visible = nil
+
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      TrackerEvent.create!(name: "tracked")
+      before = Order.count
+      commit_an_order_from_another_session
+      newly_visible = Order.count - before
+      Order.create!(name: "order")
+    end
+
+    assert_equal 1, newly_visible, "under READ COMMITTED the branch sees what another session commits"
+    assert_equal [2, 1], counts
+  ensure
+    ActiveRecord.default_transaction_isolation_level = nil
+  end
+
+  def test_without_a_default_isolation_level_the_branches_keep_repeatable_read
+    newly_visible = nil
+
+    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      before = Order.count
+      commit_an_order_from_another_session
+      newly_visible = Order.count - before
+    end
+
+    assert_equal 0, newly_visible
+  end
+
   def test_refuses_to_join_an_already_open_transaction
     assert_raises(ActiveXA::TransactionAlreadyOpen) do
       Order.transaction do
@@ -301,6 +331,14 @@ class TransactionTest < ActiveXATestCase
   end
 
   private
+    def commit_an_order_from_another_session
+      pool = PrimaryRecord.connection_pool
+      session = pool.checkout
+      session.execute("INSERT INTO orders (name) VALUES ('from another session')")
+    ensure
+      pool.checkin(session) if session
+    end
+
     def early_return_helper
       ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
         Order.create!(name: "order")

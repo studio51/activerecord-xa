@@ -67,14 +67,21 @@ module ActiveXA
         @branches << branch
         connection.active_xa_branch = branch
 
-        connection.transaction do
-          branch.ar_transaction = connection.current_transaction
-          branch.ar_transaction.active_xa_hold_callbacks!
-          yield
-          # Rails swallows ActiveRecord::Rollback where the innermost
-          # transaction ends. Every participant has to roll back, so each
-          # level raises it again for the one outside it.
-          raise ActiveRecord::Rollback if @rollback_requested
+        # Model.transaction wraps connection.transaction in this as well. It
+        # is what applies ActiveRecord.default_transaction_isolation_level,
+        # and with that default set Rails refuses every save inside a
+        # transaction that was opened without it.
+        default_isolation = ActiveRecord.default_transaction_isolation_level
+        connection.pool.with_pool_transaction_isolation_level(default_isolation, false) do
+          connection.transaction do
+            branch.ar_transaction = connection.current_transaction
+            branch.ar_transaction.active_xa_hold_callbacks!
+            yield
+            # Rails swallows ActiveRecord::Rollback where the innermost
+            # transaction ends. Every participant has to roll back, so each
+            # level raises it again for the one outside it.
+            raise ActiveRecord::Rollback if @rollback_requested
+          end
         end
       ensure
         # Before the connection can reach anyone else through the pool. One
