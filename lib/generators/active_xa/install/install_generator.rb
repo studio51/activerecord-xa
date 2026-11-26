@@ -13,6 +13,10 @@ module ActiveXA
     class InstallGenerator < Rails::Generators::Base
       include ActiveRecord::Generators::Migration
 
+      # Rails would derive "active_x_a:install" from the class name.
+      #
+      namespace "active_xa:install"
+
       source_root File.expand_path("templates", __dir__)
 
       class_option :database, type: :string, aliases: %i[--db],

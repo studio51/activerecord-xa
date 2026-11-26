@@ -11,6 +11,11 @@ class InstallGeneratorTest < Rails::Generators::TestCase
   destination File.expand_path("../tmp/generator", __dir__)
   setup :prepare_destination
 
+  def test_is_found_under_the_name_the_docs_use
+    assert_equal "active_xa:install", ActiveXA::Generators::InstallGenerator.namespace
+    assert_equal ActiveXA::Generators::InstallGenerator, Rails::Generators.find_by_namespace("active_xa:install")
+  end
+
   def test_writes_the_initializer
     run_generator
 
