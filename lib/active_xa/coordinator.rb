@@ -174,7 +174,8 @@ module ActiveXA
         @outcome = :committed
       rescue => e
         rollback_all([branch])
-        # If the rollback found nothing to undo, the commit may have landed.
+        # If the rollback failed as well, the commit may have gone through
+        # after all, and the outcome stays unknown.
         @outcome = :rolled_back if branch.state == :rolled_back
         raise PrepareFailed, "one-phase commit failed on #{branch.xid}: #{e.message}"
       end

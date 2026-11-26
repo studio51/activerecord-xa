@@ -95,6 +95,7 @@ Neither clock drift nor a slow transaction can split a transaction across databa
 - Tested against Rails 8.1 with `mysql2`. It hooks undocumented adapter internals (`internal_execute`, the transaction stack), so each Rails minor version needs testing before support is declared.
 - ActiveXA must open the outermost transaction on every participant. It raises `TransactionAlreadyOpen` otherwise, which also means transactional tests can't wrap ActiveXA code. Use truncation for those tests.
 - No DDL inside the block (MySQL implicit commits aren't allowed in XA).
+- A database only stays out of a transaction it isn't touched in while its connection begins transactions lazily, which is Rails' default. Calling `raw_connection` on a connection switches that off for good; its branch then starts as soon as the transaction opens and always takes part in the two-phase commit.
 - `XA RECOVER` is server-wide. Recovery de-duplicates branches when participants share a server, and only touches branches that belong to its own decision log. Every XID carries a namespace derived from the name of the database the log lives in, so another application on the same server, or another environment of this one, is left alone. If two installations that share a server keep their logs in databases of the same name, give each a `config.namespace`.
 
 ## Running the tests
