@@ -1,4 +1,4 @@
-# ActiveXA
+# ActiveRecord::XA
 
 > Atomic transactions across multiple MySQL databases for Active Record.
 
@@ -16,10 +16,10 @@ PrimaryRecord.transaction do
 end                                      # the tracker event stays
 ```
 
-ActiveXA runs them as one transaction using MySQL's XA two-phase commit, so every database commits or none does:
+ActiveRecord::XA runs them as one transaction using MySQL's XA two-phase commit, so every database commits or none does:
 
 ```ruby
-ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
   TrackerEvent.create!(name: "order placed")
   Order.create!(total: 0)                # raises: both roll back
 end
@@ -30,7 +30,7 @@ Inside the block you use models exactly as normal.
 ## Why use it
 
 - **All or nothing across databases.** A failure anywhere, at any point before the commit decision, rolls back every database.
-- **Survives crashes.** The decision is written to a durable log before anything commits. If the process dies halfway, `ActiveXA.recover!` finishes the job, the same way on every database.
+- **Survives crashes.** The decision is written to a durable log before anything commits. If the process dies halfway, `ActiveRecord::XA.recover!` finishes the job, the same way on every database.
 - **Plain Rails inside.** Validations, callbacks, `requires_new` savepoints, `ActiveRecord::Rollback`, isolation levels and early `return` all behave as they do in a normal transaction.
 - **`after_commit` you can trust.** Callbacks run once the data is durable on every database, so a job enqueued from `after_commit` never sees half a transaction.
 - **Pay only for what you touch.** A database the block never queries never joins. If only one is touched, the commit is a single `XA COMMIT ... ONE PHASE` with no log write.
@@ -40,22 +40,22 @@ Inside the block you use models exactly as normal.
 
 ```ruby
 # Gemfile
-gem "active_xa"
+gem "activerecord-xa"
 ```
 
 ```sh
 bundle install
-bin/rails generate active_xa:install          # add --database NAME if the log should live elsewhere
+bin/rails generate xa:install          # add --database NAME if the log should live elsewhere
 bin/rails db:migrate
 ```
 
-The generator writes `config/initializers/active_xa.rb` and a migration for the decision log table. List your databases in the initializer:
+The generator writes `config/initializers/xa.rb` and a migration for the decision log table. List your databases in the initializer:
 
 ```ruby
-ActiveXA.configure do |config|
+ActiveRecord::XA.configure do |config|
   config.decision_log_class = "ApplicationRecord"           # where the decision log lives
   config.participants       = %w[ApplicationRecord LedgerRecord]
-  config.on_incomplete_commit = ->(gtrid, failures) { Rails.error.report(ActiveXA::Error.new("XA in doubt: #{ gtrid }")) }
+  config.on_incomplete_commit = ->(gtrid, failures) { Rails.error.report(ActiveRecord::XA::Error.new("XA in doubt: #{ gtrid }")) }
 end
 ```
 
@@ -64,12 +64,12 @@ Then run recovery on a schedule, for example every minute with Solid Queue:
 ```yaml
 # config/recurring.yml
 production:
-  active_xa_recovery:
-    command: "ActiveXA.recover!"
+  xa_recovery:
+    command: "ActiveRecord::XA.recover!"
     schedule: every minute
 ```
 
-or from cron with `bin/rails active_xa:recover`.
+or from cron with `bin/rails xa:recover`.
 
 ## Examples
 
@@ -78,7 +78,7 @@ or from cron with `bin/rails active_xa:recover`.
 ```ruby
 class Transfer
   def self.call(from:, to:, amount:)
-    ActiveXA.transaction(ApplicationRecord, LedgerRecord) do
+    ActiveRecord::XA.transaction(ApplicationRecord, LedgerRecord) do
       from.lock!.decrement!(:balance, amount)
       to.lock!.increment!(:balance, amount)
       LedgerEntry.create!(from_id: from.id, to_id: to.id, amount:)
@@ -92,7 +92,7 @@ If the ledger insert fails, neither balance changes.
 ### Writing to an analytics or tracking database alongside the main one
 
 ```ruby
-ActiveXA.transaction(ApplicationRecord, TrackingRecord) do
+ActiveRecord::XA.transaction(ApplicationRecord, TrackingRecord) do
   order = Order.create!(order_params)
   TrackingEvent.create!(name: "order.created", subject: order)
 end
@@ -101,7 +101,7 @@ end
 ### Rolling back on purpose
 
 ```ruby
-ActiveXA.transaction(ApplicationRecord, LedgerRecord) do
+ActiveRecord::XA.transaction(ApplicationRecord, LedgerRecord) do
   invoice = Invoice.create!(attrs)
   LedgerEntry.create!(invoice:)
   raise ActiveRecord::Rollback if invoice.total.zero?   # both roll back, nothing is raised
@@ -111,12 +111,12 @@ end
 ### Returning a value, or leaving early
 
 ```ruby
-order = ActiveXA.transaction(ApplicationRecord, LedgerRecord) do
+order = ActiveRecord::XA.transaction(ApplicationRecord, LedgerRecord) do
   Order.create!(attrs).tap { |o| LedgerEntry.create!(order: o) }
 end
 
 def place(attrs)
-  ActiveXA.transaction(ApplicationRecord, LedgerRecord) do
+  ActiveRecord::XA.transaction(ApplicationRecord, LedgerRecord) do
     order = Order.create!(attrs)
     return order if order.free?     # commits, as `return` does in a Rails transaction
     LedgerEntry.create!(order:)
@@ -139,7 +139,7 @@ end
 ### Nested transactions and savepoints
 
 ```ruby
-ActiveXA.transaction(ApplicationRecord, LedgerRecord) do
+ActiveRecord::XA.transaction(ApplicationRecord, LedgerRecord) do
   order = Order.create!(attrs)
 
   Order.transaction(requires_new: true) do     # a savepoint inside the XA branch
@@ -170,10 +170,10 @@ end
 
 ```ruby
 begin
-  ActiveXA.transaction(ApplicationRecord, LedgerRecord) { ... }
-rescue ActiveXA::PrepareFailed, ActiveXA::DecisionLogFailed
+  ActiveRecord::XA.transaction(ApplicationRecord, LedgerRecord) { ... }
+rescue ActiveRecord::XA::PrepareFailed, ActiveRecord::XA::DecisionLogFailed
   # Rolled back everywhere. Safe to retry.
-rescue ActiveXA::OutcomeUnknown
+rescue ActiveRecord::XA::OutcomeUnknown
   # The decision log was unreachable at the critical moment. Nothing was
   # rolled back; recovery will finish the transaction one way or the other.
   # Do not retry blindly: check whether the work landed first.
@@ -185,8 +185,8 @@ Once the commit decision is logged the transaction counts as committed. A databa
 ### Checking what recovery did
 
 ```ruby
-report = ActiveXA.recover!
-report.committed     # => [#<ActiveXA::Xid ...>]  branches committed from the log
+report = ActiveRecord::XA.recover!
+report.committed     # => [#<ActiveRecord::XA::Xid ...>]  branches committed from the log
 report.rolled_back   # => branches with no decision, rolled back (presumed abort)
 report.skipped       # => branches younger than the grace period
 report.errors        # => [[subject, exception], ...]
@@ -199,8 +199,8 @@ Two-phase commit costs extra round trips and extra durable writes. A transaction
 | | Statements | Durable flushes |
 |---|---:|---:|
 | Nested plain transactions | 6 | 2 |
-| ActiveXA, one database touched | 4 | 1 |
-| ActiveXA, two databases | 12 | 6 |
+| ActiveRecord::XA, one database touched | 4 | 1 |
+| ActiveRecord::XA, two databases | 12 | 6 |
 
 Measured with `bundle exec rake bench` (2,000 transactions each, one thread, Ruby 4.0.10, Rails 8.1.4, MySQL 9.7 on the same Apple M2 laptop, `innodb_flush_log_at_trx_commit=1`, `sync_binlog=1`):
 
@@ -208,16 +208,16 @@ Measured with `bundle exec rake bench` (2,000 transactions each, one thread, Rub
 |---|---:|---:|---:|---:|
 | One database, plain transaction | 0.18 ms | 0.16 ms | 0.47 ms | 5,416 |
 | Two databases, nested plain transactions (not atomic) | 0.35 ms | 0.33 ms | 0.74 ms | 2,838 |
-| ActiveXA, one database touched | 0.23 ms | 0.21 ms | 0.69 ms | 4,347 |
-| ActiveXA, two databases | 0.87 ms | 0.82 ms | 1.53 ms | 1,149 |
+| ActiveRecord::XA, one database touched | 0.23 ms | 0.21 ms | 0.69 ms | 4,347 |
+| ActiveRecord::XA, two databases | 0.87 ms | 0.82 ms | 1.53 ms | 1,149 |
 
-In short: atomicity across two databases costs about half a millisecond per transaction here, and a transaction that only touches one database costs almost nothing extra. On Linux servers, where each flush reaches stable storage, the gap grows with your storage's fsync latency, since ActiveXA does three times as many. Run the benchmark on your own hardware before relying on these numbers.
+In short: atomicity across two databases costs about half a millisecond per transaction here, and a transaction that only touches one database costs almost nothing extra. On Linux servers, where each flush reaches stable storage, the gap grows with your storage's fsync latency, since ActiveRecord::XA does three times as many. Run the benchmark on your own hardware before relying on these numbers.
 
 ## How it works
 
 1. A normal Rails transaction is opened on each database, but the adapter issues `XA START` instead of `BEGIN`, lazily, when the database is first queried.
 2. Your block runs.
-3. While all the transactions are still open, ActiveXA runs `before_commit` callbacks, then `XA END` and `XA PREPARE` on every database. Each database has now promised it can commit.
+3. While all the transactions are still open, ActiveRecord::XA runs `before_commit` callbacks, then `XA END` and `XA PREPARE` on every database. Each database has now promised it can commit.
 4. A commit decision is written to the decision log on a separate connection. This is the point of no return.
 5. `XA COMMIT` runs on every database, then the decision is deleted.
 6. `after_commit` callbacks run.
@@ -229,7 +229,7 @@ Recovery resolves anything a crash leaves prepared: a branch whose transaction h
 - **No isolation across databases.** Between the first and last `XA COMMIT` (normally microseconds), a reader can see one database's new data without the other's.
 - **Locks wait for recovery.** A prepared branch holds its row locks until it is resolved. If a database becomes unreachable after `PREPARE`, those rows stay locked until recovery runs, so run it often.
 - **No DDL inside the block.** MySQL does not allow implicit commits in an XA transaction.
-- **ActiveXA must open the outermost transaction** on every participant; it raises `TransactionAlreadyOpen` otherwise. That also means transactional tests cannot wrap ActiveXA code: use truncation for those tests.
+- **ActiveRecord::XA must open the outermost transaction** on every participant; it raises `TransactionAlreadyOpen` otherwise. That also means transactional tests cannot wrap ActiveRecord::XA code: use truncation for those tests.
 
 ## Requirements
 

@@ -2,11 +2,11 @@
 
 require "securerandom"
 
-module ActiveXA
+module ActiveRecord::XA
 
   # An XA transaction identifier: MySQL names a branch by (gtrid, bqual, formatID).
   # The gtrid is shared by every branch of one global transaction, and the bqual names the branch.
-  # The formatID marks the XID as ActiveXA's in XA RECOVER output.
+  # The formatID marks the XID as ActiveRecord::XA's in XA RECOVER output.
   # The gtrid also carries the namespace of the decision log that decides it, so recovery can tell its own transactions from another installation's, and its creation time, for the grace period.
   #
   #   axa-<namespace>-<start time in ms>-<random>
@@ -15,11 +15,11 @@ module ActiveXA
 
     # --- Format ---
 
-    FORMAT_ID      = 0x41584131 # "AXA1", marks ActiveXA's XIDs in XA RECOVER
+    FORMAT_ID      = 0x41584131 # "AXA1", marks ActiveRecord::XA's XIDs in XA RECOVER
     PREFIX         = "axa".freeze # first segment of every gtrid
     MAX_PART_BYTES = 64 # MySQL's limit for gtrid and for bqual, in bytes
 
-    # The shape of a gtrid ActiveXA generated.
+    # The shape of a gtrid ActiveRecord::XA generated.
     #
     GTRID = /\A#{ PREFIX }-(?<namespace>\h{8})-(?<millis>\d{1,15})-\h+\z/
 
@@ -50,7 +50,7 @@ module ActiveXA
       # Reads the namespace out of a gtrid.
       #
       # @param gtrid [String] the gtrid
-      # @return [String, nil] the namespace, or nil if ActiveXA did not make the gtrid
+      # @return [String, nil] the namespace, or nil if ActiveRecord::XA did not make the gtrid
       def namespace(gtrid)
         parse(gtrid)&.[](:namespace)
       end
@@ -58,7 +58,7 @@ module ActiveXA
       # Reads the start time out of a gtrid.
       #
       # @param gtrid [String] the gtrid
-      # @return [Time, nil] when the transaction started, or nil if ActiveXA did not make the gtrid
+      # @return [Time, nil] when the transaction started, or nil if ActiveRecord::XA did not make the gtrid
       def created_at(gtrid)
         millis = parse(gtrid)&.[](:millis)
 
@@ -67,7 +67,7 @@ module ActiveXA
 
       private
 
-        # Matches a gtrid against the format ActiveXA generates.
+        # Matches a gtrid against the format ActiveRecord::XA generates.
         #
         # @param gtrid [String] the gtrid
         # @return [MatchData, nil] the match, or nil

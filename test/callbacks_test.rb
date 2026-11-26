@@ -3,9 +3,9 @@
 require_relative "test_helper"
 require "timeout"
 
-class CallbacksTest < ActiveXATestCase
+class CallbacksTest < XATestCase
   def test_before_commit_runs_for_a_record_enrolled_by_the_other_databases_before_commit
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "order")
       HookedEvent.create!(on_before_commit: -> {
         HookedOrder.create!(name: "late", on_before_commit: -> { Events.log << :late_order_before_commit })
@@ -17,7 +17,7 @@ class CallbacksTest < ActiveXATestCase
   end
 
   def test_before_commit_runs_for_a_record_enrolled_in_a_database_that_already_had_its_turn
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       TrackerEvent.create!(name: "tracked")
       HookedOrder.create!(on_before_commit: -> {
         HookedEvent.create!(name: "late", on_before_commit: -> { Events.log << :late_event_before_commit })
@@ -29,7 +29,7 @@ class CallbacksTest < ActiveXATestCase
   end
 
   def test_each_before_commit_runs_once_however_the_databases_interleave
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       HookedOrder.create!(on_before_commit: -> { Events.log << :order })
       HookedEvent.create!(on_before_commit: -> {
         Events.log << :event
@@ -45,7 +45,7 @@ class CallbacksTest < ActiveXATestCase
     spawn = -> { HookedEvent.create!(on_before_commit: -> { HookedOrder.create!(on_before_commit: spawn) }) }
 
     Timeout.timeout(10) do
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) { HookedOrder.create!(on_before_commit: spawn) }
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { HookedOrder.create!(on_before_commit: spawn) }
     end
 
     # As with nested Rails transactions: the record the event adds while the
@@ -54,7 +54,7 @@ class CallbacksTest < ActiveXATestCase
   end
 
   def test_before_commit_callbacks_registered_on_the_transaction_run_once
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "order")
       TrackerEvent.create!(name: "tracked")
       PrimaryRecord.with_connection do |connection|
@@ -66,7 +66,7 @@ class CallbacksTest < ActiveXATestCase
   end
 
   def test_after_commit_can_write_to_its_own_database
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "order")
       HookedEvent.create!(name: "tracked", on_after_commit: -> { TrackerEvent.create!(name: "from after_commit") })
     end
@@ -76,7 +76,7 @@ class CallbacksTest < ActiveXATestCase
   end
 
   def test_after_commit_gets_real_transactions_on_the_other_database
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "order")
       HookedEvent.create!(on_after_commit: -> {
         Order.transaction(requires_new: true) { Order.create!(name: "kept") }
@@ -88,10 +88,10 @@ class CallbacksTest < ActiveXATestCase
   end
 
   def test_after_commit_can_start_another_xa_transaction
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "first")
       HookedEvent.create!(name: "first", on_after_commit: -> {
-        ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "second"); TrackerEvent.create!(name: "second") }
+        ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "second"); TrackerEvent.create!(name: "second") }
       })
     end
 
@@ -99,7 +99,7 @@ class CallbacksTest < ActiveXATestCase
   end
 
   def test_after_all_transactions_commit_runs_once_and_can_write
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       Order.create!(name: "order")
       TrackerEvent.create!(name: "tracked")
       ActiveRecord.after_all_transactions_commit do
@@ -115,7 +115,7 @@ class CallbacksTest < ActiveXATestCase
   def test_a_failing_after_commit_does_not_make_the_other_database_look_rolled_back
     order = nil
     error = assert_raises(RuntimeError) do
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
         order = Order.create!(name: "order")
         HookedEvent.create!(on_after_commit: -> { raise "after_commit failed" })
       end
@@ -130,7 +130,7 @@ class CallbacksTest < ActiveXATestCase
 
   def test_after_rollback_can_write_and_the_original_error_survives
     error = assert_raises(RuntimeError) do
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
         Order.create!(name: "order")
         HookedEvent.create!(on_after_rollback: -> { TrackerEvent.create!(name: "from after_rollback") })
         raise "boom"
@@ -143,7 +143,7 @@ class CallbacksTest < ActiveXATestCase
   end
 
   def test_active_record_rollback_from_a_before_commit_callback_rolls_back_quietly
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       HookedOrder.create!(name: "order", on_before_commit: -> { raise ActiveRecord::Rollback })
       TrackerEvent.create!(name: "tracked")
     end
@@ -154,7 +154,7 @@ class CallbacksTest < ActiveXATestCase
 
   def test_before_commit_failure_rolls_everything_back
     assert_raises(RuntimeError) do
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
         Order.create!(name: "order")
         HookedEvent.create!(on_before_commit: -> { raise "not today" })
       end

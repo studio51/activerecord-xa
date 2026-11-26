@@ -1,4 +1,4 @@
-# Contributing to ActiveXA
+# Contributing to ActiveRecord::XA
 
 Thanks for taking the time to contribute. This project follows the Studio51
 shared conventions; they're identical across all our repos, so once you know

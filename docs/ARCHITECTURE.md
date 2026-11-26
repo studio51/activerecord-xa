@@ -1,30 +1,31 @@
 # Architecture
 
-> How ActiveXA is put together, and why.
+> How ActiveRecord::XA is put together, and why.
 
 ## Overview
 
 Rails runs one transaction per database connection. Nesting `transaction` blocks for two databases gives two independent transactions: the inner one commits when its block exits, so a failure afterwards leaves one database changed and the other not.
 
-ActiveXA turns those transactions into branches of one global transaction using MySQL's XA, an implementation of two-phase commit. Every branch first promises it can commit (`XA PREPARE`). Only when all have promised is the decision to commit written down, and only then is each branch committed. A crash at any point leaves enough behind for a recovery run to finish the job the same way on every database.
+ActiveRecord::XA turns those transactions into branches of one global transaction using MySQL's XA, an implementation of two-phase commit. Every branch first promises it can commit (`XA PREPARE`). Only when all have promised is the decision to commit written down, and only then is each branch committed. A crash at any point leaves enough behind for a recovery run to finish the job the same way on every database.
 
 ## Structure
 
 ```
 lib/
-  active_xa.rb                     entrypoint: ActiveXA.transaction, .recover!, .configure, load hooks
-  active_xa/configuration.rb       settings
-  active_xa/coordinator.rb         runs one global transaction: enlist, prepare, decide, commit
-  active_xa/branch.rb              one database's XA state machine
-  active_xa/xid.rb                 XA transaction identifiers
-  active_xa/decision_log.rb        the durable commit / abort decisions
-  active_xa/recovery.rb            resolves prepared branches left behind
-  active_xa/adapter_extension.rb   reroutes BEGIN / COMMIT / ROLLBACK on enlisted connections
-  active_xa/transaction_extension.rb  lets the coordinator time Rails' transactional callbacks
-  active_xa/railtie.rb             the active_xa:recover rake task
-  generators/active_xa/install/    initializer and migration generator
-test/                              Minitest, against a real MySQL server
-benchmark/transactions.rb          per-transaction cost
+  activerecord-xa.rb                   lets Bundler require the gem by its name
+  active_record/xa.rb                  entrypoint: ActiveRecord::XA.transaction, .recover!, .configure, load hooks
+  active_record/xa/configuration.rb    settings
+  active_record/xa/coordinator.rb      runs one global transaction: enlist, prepare, decide, commit
+  active_record/xa/branch.rb           one database's XA state machine
+  active_record/xa/xid.rb              XA transaction identifiers
+  active_record/xa/decision_log.rb     the durable commit / abort decisions
+  active_record/xa/recovery.rb         resolves prepared branches left behind
+  active_record/xa/adapter_extension.rb      reroutes BEGIN / COMMIT / ROLLBACK on enlisted connections
+  active_record/xa/transaction_extension.rb  lets the coordinator time Rails' transactional callbacks
+  active_record/xa/railtie.rb          the xa:recover rake task
+  generators/xa/install/               initializer and migration generator
+test/                                  Minitest, against a real MySQL server
+benchmark/transactions.rb              per-transaction cost
 ```
 
 ## The commit protocol
@@ -52,7 +53,7 @@ The log is written on a connection checked out separately from its pool, so it i
 
 ## Recovery
 
-`ActiveXA.recover!` lists prepared branches with `XA RECOVER` on each participant and resolves those older than the grace period:
+`ActiveRecord::XA.recover!` lists prepared branches with `XA RECOVER` on each participant and resolves those older than the grace period:
 
 - a logged `commit`: `XA COMMIT`
 - no decision: write `abort`, then `XA ROLLBACK`
@@ -83,6 +84,6 @@ Ruby can raise into a thread at any point (a request timeout, an interrupt) or k
 
 - **Presumed abort.** Only commit decisions need to be durable before acting; anything undecided is rolled back. This keeps the common path to one log insert and one delete per transaction.
 - **The log arbitrates, not the clock.** The grace period only avoids disturbing transactions that are still running. Correctness comes from the primary key on the decision log.
-- **Rails stays in charge of the block.** ActiveXA reroutes three adapter methods and times four transaction hooks; everything else inside the block is ordinary Active Record. The price is coupling to Active Record internals (`internal_execute`, the transaction stack), so each Rails minor version is tested before the gemspec allows it.
-- **Lazy enlistment.** A database joins only when queried, which makes ActiveXA nearly free when a block touches one database. With lazy transactions switched off on a connection (calling `raw_connection` does that for good), its branch starts when the transaction opens and always takes part in the two-phase commit.
+- **Rails stays in charge of the block.** ActiveRecord::XA reroutes three adapter methods and times four transaction hooks; everything else inside the block is ordinary Active Record. The price is coupling to Active Record internals (`internal_execute`, the transaction stack), so each Rails minor version is tested before the gemspec allows it.
+- **Lazy enlistment.** A database joins only when queried, which makes ActiveRecord::XA nearly free when a block touches one database. With lazy transactions switched off on a connection (calling `raw_connection` does that for good), its branch starts when the transaction opens and always takes part in the two-phase commit.
 - **Separate branches on a shared server.** Two databases on the same MySQL server still get two branches. MySQL treats them as unrelated transactions: neither sees the other's uncommitted changes, and if both touch the same row the second waits for the first until `innodb_lock_wait_timeout`.

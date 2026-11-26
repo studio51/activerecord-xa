@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Measures what ActiveXA costs per transaction, against the alternatives.
+# Measures what ActiveRecord::XA costs per transaction, against the alternatives.
 #
 #   MYSQL_HOST=127.0.0.1 bundle exec ruby benchmark/transactions.rb [iterations]
 #
@@ -10,7 +10,7 @@
 # and recreates its own tables.
 #
 $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
-require "active_xa"
+require "active_record/xa"
 require "mysql2"
 
 ENV["RAILS_ENV"] ||= "development"
@@ -55,11 +55,11 @@ end
   klass.connection.execute("CREATE TABLE #{ table } (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(50)) ENGINE=InnoDB")
 end
 
-ActiveXA.configure do |c|
+ActiveRecord::XA.configure do |c|
   c.decision_log_class = PrimaryRecord
   c.logger = nil
 end
-ActiveXA.decision_log.create_table!
+ActiveRecord::XA.decision_log.create_table!
 
 SCENARIOS = {
   "one database, plain transaction" => -> {
@@ -73,11 +73,11 @@ SCENARIOS = {
       end
     end
   },
-  "ActiveXA, one database touched (one-phase)" => -> {
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) { BenchOrder.create!(name: "order") }
+  "ActiveRecord::XA, one database touched (one-phase)" => -> {
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { BenchOrder.create!(name: "order") }
   },
-  "ActiveXA, two databases (two-phase + decision log)" => -> {
-    ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+  "ActiveRecord::XA, two databases (two-phase + decision log)" => -> {
+    ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
       BenchEvent.create!(name: "event")
       BenchOrder.create!(name: "order")
     end

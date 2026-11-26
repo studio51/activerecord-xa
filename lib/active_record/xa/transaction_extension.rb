@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ActiveXA
+module ActiveRecord::XA
 
   # Prepended to Active Record's transaction class.
   # Lets the coordinator decide when a participant's transactional callbacks run, instead of Rails running them as each transaction block exits.
@@ -19,30 +19,30 @@ module ActiveXA
     #
     # @return [void]
     def before_commit_records
-      super unless @active_xa_runs_before_commit
+      super unless @xa_runs_before_commit
     end
 
     # Runs after_commit callbacks, unless the coordinator is holding them.
     #
     # @return [void]
     def commit_records
-      super unless @active_xa_holds_callbacks
+      super unless @xa_holds_callbacks
     end
 
     # Runs after_rollback callbacks, unless the coordinator is holding them.
     #
     # @return [void]
     def rollback_records
-      super unless @active_xa_holds_callbacks
+      super unless @xa_holds_callbacks
     end
 
     # --- Coordinator API ---
 
-    # Holds after_commit and after_rollback until #active_xa_release_callbacks!.
+    # Holds after_commit and after_rollback until #xa_release_callbacks!.
     #
     # @return [Boolean] true
-    def active_xa_hold_callbacks!
-      @active_xa_holds_callbacks = true
+    def xa_hold_callbacks!
+      @xa_holds_callbacks = true
     end
 
     # Runs the held callbacks as the coordinator says the global transaction ended, whatever Rails made of its own block.
@@ -50,8 +50,8 @@ module ActiveXA
     #
     # @param action [Symbol, nil] :commit_records, :rollback_records or nil
     # @return [void]
-    def active_xa_release_callbacks!(action)
-      @active_xa_holds_callbacks = false
+    def xa_release_callbacks!(action)
+      @xa_holds_callbacks = false
 
       public_send(action) if action
     end
@@ -59,8 +59,8 @@ module ActiveXA
     # Whether anything has been enrolled since the last before_commit pass.
     #
     # @return [Boolean] true if records or callbacks are waiting for a pass
-    def active_xa_before_commit_pending?
-      records.to_a.size > @active_xa_records_done.to_i || @callbacks.to_a.size > @active_xa_callbacks_done.to_i
+    def xa_before_commit_pending?
+      records.to_a.size > @xa_records_done.to_i || @callbacks.to_a.size > @xa_callbacks_done.to_i
     end
 
     # Runs one before_commit pass, for whatever was enrolled since the previous one.
@@ -69,20 +69,20 @@ module ActiveXA
     #
     # @yield runs while this pass is in progress, so the coordinator can visit other branches
     # @return [void]
-    def active_xa_run_before_commit!
-      @active_xa_runs_before_commit = true
-      fresh_records = records.to_a.drop(@active_xa_records_done.to_i)
-      fresh_callbacks = @callbacks.to_a.drop(@active_xa_callbacks_done.to_i)
+    def xa_run_before_commit!
+      @xa_runs_before_commit = true
+      fresh_records = records.to_a.drop(@xa_records_done.to_i)
+      fresh_callbacks = @callbacks.to_a.drop(@xa_callbacks_done.to_i)
 
       if @run_commit_callbacks
-        active_xa_before_commit(fresh_records)
+        xa_before_commit(fresh_records)
         fresh_callbacks.each(&:before_commit)
       end
 
       yield if block_given?
-      @active_xa_records_done = records.to_a.size
+      @xa_records_done = records.to_a.size
 
-      @active_xa_callbacks_done = @callbacks.to_a.size
+      @xa_callbacks_done = @callbacks.to_a.size
     end
 
     private
@@ -91,7 +91,7 @@ module ActiveXA
       #
       # @param records [Array<ActiveRecord::Base>] the records enrolled since the last pass
       # @return [void]
-      def active_xa_before_commit(records)
+      def xa_before_commit(records)
         if ActiveRecord.before_committed_on_all_records
           last_copy = records.each_with_object({}) { |record, copies| copies[record] = record }
           records.uniq(&:__id__).each { |record| record.before_committed! if record.equal?(last_copy[record]) }

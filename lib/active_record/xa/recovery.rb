@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ActiveXA
+module ActiveRecord::XA
 
   # Resolves branches left PREPARED by a crash or a failed commit.
   #
@@ -32,12 +32,12 @@ module ActiveXA
 
     # Prepares a recovery run.
     #
-    # @param record_classes [Array<Class>] Active Record classes covering every database that takes part in ActiveXA transactions
+    # @param record_classes [Array<Class>] Active Record classes covering every database that takes part in ActiveRecord::XA transactions
     # @param log [DecisionLog] the decision log
     # @param grace [Numeric] seconds a transaction must have been running before recovery touches it
     # @param abort_retention [Numeric] seconds to keep an abort marker
     # @return [Recovery] the new run
-    def initialize(record_classes, log:, grace:, abort_retention: ActiveXA.config.abort_retention)
+    def initialize(record_classes, log:, grace:, abort_retention: ActiveRecord::XA.config.abort_retention)
       @pools = record_classes.map(&:connection_pool).uniq
       @log = log
       @grace = grace

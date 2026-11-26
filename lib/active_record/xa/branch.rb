@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ActiveXA
+module ActiveRecord::XA
 
   # One database's part in a global transaction, tracking MySQL's XA state.
   #

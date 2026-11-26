@@ -4,7 +4,7 @@ require_relative "test_helper"
 
 # MySQL undoes the whole branch of a deadlock victim and marks it
 # rollback-only: XA END and XA PREPARE fail, and only XA ROLLBACK closes it.
-class DeadlockTest < ActiveXATestCase
+class DeadlockTest < XATestCase
   def test_the_victim_of_a_deadlock_sees_the_deadlock_and_everything_rolls_back
     assert_raises(ActiveRecord::Deadlocked) do
       with_deadlock_on_primary { |deadlocking_statement| deadlocking_statement.call }
@@ -18,7 +18,7 @@ class DeadlockTest < ActiveXATestCase
   end
 
   def test_a_deadlock_the_block_swallows_still_aborts_the_whole_transaction
-    assert_raises(ActiveXA::PrepareFailed) do
+    assert_raises(ActiveRecord::XA::PrepareFailed) do
       with_deadlock_on_primary do |deadlocking_statement|
         deadlocking_statement.call
       rescue ActiveRecord::Deadlocked
@@ -34,7 +34,7 @@ class DeadlockTest < ActiveXATestCase
   end
 
   private
-    # Runs an ActiveXA transaction whose primary branch becomes the victim
+    # Runs an ActiveRecord::XA transaction whose primary branch becomes the victim
     # of a deadlock with another session. Yields the statement that will
     # deadlock, for the test to run inside the block.
     #
@@ -54,7 +54,7 @@ class DeadlockTest < ActiveXATestCase
       # InnoDB sacrifices the transaction that has done less work. Make that ours.
       20.times { |i| rival.execute("INSERT INTO orders (name) VALUES ('padding #{ i }')") }
 
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) do
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
         TrackerEvent.create!(name: "tracked")
         a.update!(name: "ours")
         waiting = Thread.new { rival.execute("UPDATE orders SET name = 'rival' WHERE id = #{ a.id }") }
@@ -74,7 +74,7 @@ class DeadlockTest < ActiveXATestCase
 
     def assert_connections_still_work
       Order.transaction { Order.create!(name: "plain") }
-      ActiveXA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "xa"); TrackerEvent.create!(name: "xa") }
+      ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) { Order.create!(name: "xa"); TrackerEvent.create!(name: "xa") }
 
       assert_equal %w[plain xa], Order.order(:id).last(2).map(&:name)
       assert_equal [ "xa" ], TrackerEvent.pluck(:name)
