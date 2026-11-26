@@ -8,7 +8,7 @@ gemspec
 #
 group :development, :test do
   gem "rake"
-  gem "minitest", "~> 5.0"
+  gem "minitest", "~> 6.1"
   gem "mysql2", "~> 0.5"
   gem "railties", "~> 8.1" # for the install generator and its test
 
