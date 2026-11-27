@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-27
+
+First release.
+
 ### Added
 - `ActiveRecord::XA.transaction`: one transaction across several MySQL databases, using XA two-phase commit, with Rails callbacks, savepoints, isolation levels and `ActiveRecord::Rollback` working as in a normal transaction.
 - A durable decision log and `ActiveRecord::XA.recover!`, which commits or rolls back whatever a crash leaves prepared, the same way on every database.
@@ -16,4 +20,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A benchmark of the per-transaction cost (`rake bench`).
 - An example Rails app (`example/`): a shop and a ledger in two databases, with buttons for declined cards, crashes mid-commit and recovery.
 
-[Unreleased]: https://github.com/studio51/activerecord-xa/commits/main
+[Unreleased]: https://github.com/studio51/activerecord-xa/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/studio51/activerecord-xa/releases/tag/v0.1.0
