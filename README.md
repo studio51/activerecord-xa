@@ -25,7 +25,7 @@ ActiveRecord::XA.transaction(PrimaryRecord, TrackerRecord) do
 end
 ```
 
-Inside the block you use models exactly as normal.
+Inside the block you use models exactly as normal. The [example app](example/) shows it side by side with plain nested transactions, including crashes and recovery.
 
 ## Why use it
 

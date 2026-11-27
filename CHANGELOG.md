@@ -14,5 +14,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `bin/rails generate xa:install`, writing the initializer and the decision log migration.
 - Class names accepted for `decision_log_class` and `participants`, so initializers never load models.
 - A benchmark of the per-transaction cost (`rake bench`).
+- An example Rails app (`example/`): a shop and a ledger in two databases, with buttons for declined cards, crashes mid-commit and recovery.
 
 [Unreleased]: https://github.com/studio51/activerecord-xa/commits/main

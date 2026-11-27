@@ -1,0 +1,107 @@
+<header>
+  <h1>ActiveRecord::XA example: a shop and a ledger in two MySQL databases</h1>
+  <p>Every sale takes stock and creates an order in the <strong>shop</strong> database, and records the money in the <strong>ledger</strong> database. Try each button and watch whether the two stay in step.</p>
+</header>
+
+<% if notice %><p class="flash notice"><%= notice %></p><% end %>
+<% if alert %><p class="flash alert"><%= alert %></p><% end %>
+
+<section class="consistency <%= @orders_without_entry.zero? && @entries_without_order.zero? ? "ok" : "broken" %>">
+  <strong>Consistency:</strong>
+  <%= pluralize(@orders_without_entry, "order") %> without a ledger entry,
+  <%= pluralize(@entries_without_order, "ledger entry") %> without an order.
+</section>
+
+<section>
+  <h2>Sell</h2>
+  <table>
+    <thead><tr><th>Product</th><th>Price</th><th>Stock</th><th></th></tr></thead>
+    <tbody>
+      <% @products.each do |product| %>
+        <tr>
+          <td><%= product.name %></td>
+          <td><%= number_to_currency(product.price_cents / 100.0) %></td>
+          <td><%= product.stock %></td>
+          <td class="actions">
+            <%= button_to "Buy (ActiveRecord::XA)", checkouts_path(product_id: product.id, scenario: "atomic") %>
+            <%= button_to "Buy, card declined (ActiveRecord::XA)", checkouts_path(product_id: product.id, scenario: "declined") %>
+            <%= button_to "Buy, card declined (plain nested transactions)", checkouts_path(product_id: product.id, scenario: "naive_declined"), class: "danger" %>
+          </td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Crash and recover</h2>
+  <p>Each button sells a throwaway product in a separate process that is killed mid-commit, leaving a prepared branch in each database. Its rows stay locked until recovery resolves them.</p>
+  <div class="actions">
+    <%= button_to "Kill a checkout after the commit decision", crashes_path(stage: "after_decision") %>
+    <%= button_to "Kill a checkout before the commit decision", crashes_path(stage: "before_decision") %>
+    <%= button_to "Run recovery", recovery_path, class: "primary" %>
+    <%= button_to "Reset the demo", reset_path, class: "secondary" %>
+  </div>
+
+  <h3>Prepared XA branches (XA RECOVER)</h3>
+  <% if @prepared.empty? %>
+    <p class="empty">None.</p>
+  <% else %>
+    <table>
+      <thead><tr><th>Transaction</th><th>Branch</th><th>Age</th></tr></thead>
+      <tbody>
+        <% @prepared.each do |branch| %>
+          <tr><td><code><%= branch[:gtrid] %></code></td><td><%= branch[:branch] %></td><td><%= branch[:age] %>s</td></tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+
+  <h3>Decision log</h3>
+  <p>A commit decision lives from just before the first XA COMMIT until every branch has committed. An abort marker, written by recovery before it rolls back an undecided transaction, stays for a day so a stalled checkout can never commit late.</p>
+  <% if @decisions.empty? %>
+    <p class="empty">Empty: every finished transaction's decision has been cleared.</p>
+  <% else %>
+    <table>
+      <thead><tr><th>Transaction</th><th>Outcome</th><th>Databases</th><th>Logged at</th></tr></thead>
+      <tbody>
+        <% @decisions.each do |decision| %>
+          <tr><td><code><%= decision["gtrid"] %></code></td><td><%= decision["outcome"] %></td><td><%= decision["participants"] %></td><td><%= decision["created_at"] %></td></tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+</section>
+
+<section class="columns">
+  <div>
+    <h2>Shop: orders</h2>
+    <table>
+      <thead><tr><th>#</th><th>Product</th><th>Total</th><th>In ledger?</th></tr></thead>
+      <tbody>
+        <% @orders.each do |order| %>
+          <tr class="<%= "orphan" unless @recorded.include?(order.id) %>">
+            <td><%= order.id %></td><td><%= order.product.name %></td>
+            <td><%= number_to_currency(order.total_cents / 100.0) %></td>
+            <td><%= @recorded.include?(order.id) ? "yes" : "no" %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+  <div>
+    <h2>Ledger: entries</h2>
+    <table>
+      <thead><tr><th>#</th><th>Order</th><th>Amount</th><th>Note</th></tr></thead>
+      <tbody>
+        <% order_ids = Order.where(id: @ledger_entries.map(&:order_id)).pluck(:id).to_set %>
+        <% @ledger_entries.each do |entry| %>
+          <tr class="<%= "orphan" unless order_ids.include?(entry.order_id) %>">
+            <td><%= entry.id %></td><td><%= entry.order_id %><%= " (missing)" unless order_ids.include?(entry.order_id) %></td>
+            <td><%= number_to_currency(entry.amount_cents / 100.0) %></td><td><%= entry.note %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+</section>

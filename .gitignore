@@ -11,6 +11,8 @@
 /.yardoc/
 # Libraries don't commit the lockfile; consumers resolve their own.
 Gemfile.lock
+# The example is an application, so its lockfile is committed.
+!/example/Gemfile.lock
 .env
 .env.*
 !.env.example

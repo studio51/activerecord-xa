@@ -1,0 +1,24 @@
+# Two MySQL databases: the shop (primary) and a separate ledger.
+# Point them at a server with MYSQL_HOST, MYSQL_TCP_PORT, MYSQL_USER and
+# MYSQL_PASSWORD. The user must be able to create databases, and needs
+# XA_RECOVER_ADMIN for the recovery button.
+#
+default: &default
+  adapter: mysql2
+  encoding: utf8mb4
+  host: <%= ENV.fetch("MYSQL_HOST", "127.0.0.1") %>
+  port: <%= ENV.fetch("MYSQL_TCP_PORT", 3306) %>
+  username: <%= ENV.fetch("MYSQL_USER", "root") %>
+  password: <%= ENV["MYSQL_PASSWORD"] %>
+  # The decision log takes a second connection from the shop's pool for a
+  # moment at each two-database commit, so leave room for it.
+  max_connections: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 }.to_i * 2 %>
+
+development:
+  primary:
+    <<: *default
+    database: xa_example_shop
+  ledger:
+    <<: *default
+    database: xa_example_ledger
+    migrations_paths: db/ledger_migrate
